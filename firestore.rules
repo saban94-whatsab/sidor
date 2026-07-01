@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow public access to orders and auditLogs for our operations in the preview app
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+    match /auditLogs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}

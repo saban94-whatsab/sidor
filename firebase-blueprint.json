@@ -1,0 +1,34 @@
+{
+  "collections": {
+    "orders": {
+      "description": "Stores user-facing and synchronized customer orders",
+      "fields": {
+        "id": "string",
+        "timestamp": "string",
+        "orderNumber": "string",
+        "customerName": "string",
+        "warehouse": "string",
+        "deliveryAddress": "string",
+        "items": "array",
+        "notes": "string?",
+        "status": "string",
+        "aiModel": "string?",
+        "predictedDelay": "number?",
+        "delayReason": "string?",
+        "lastUpdated": "string?"
+      }
+    },
+    "auditLogs": {
+      "description": "Stores audit history of status updates per order",
+      "fields": {
+        "id": "string",
+        "timestamp": "string",
+        "orderId": "string",
+        "orderNumber": "string",
+        "oldStatus": "string",
+        "newStatus": "string",
+        "updatedBy": "string"
+      }
+    }
+  }
+}

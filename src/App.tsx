@@ -11,6 +11,15 @@ import {
   getStoredAuditLogs,
   saveStoredAuditLogs
 } from './utils/api';
+import { 
+  getOrdersFromFirestore, 
+  saveOrderToFirestore, 
+  syncOrdersToFirestore, 
+  deleteOrderFromFirestore,
+  getAuditLogsFromFirestore, 
+  saveAuditLogToFirestore, 
+  syncAuditLogsToFirestore 
+} from './utils/firebase';
 import { Order, AppConfig, Language, OrderStatus, AuditLogEntry } from './types';
 import MetricCard from './components/MetricCard';
 import DispatchTable from './components/DispatchTable';
@@ -92,15 +101,30 @@ export default function App() {
     const targetUrl = config.webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
     
     try {
-      const liveData = await fetchLiveOrders(targetUrl);
-      setOrders(liveData);
-      saveStoredOrders(liveData);
-      setAuditLogs(getStoredAuditLogs(liveData));
+      console.log('Attempting to fetch orders from Firestore...');
+      let firestoreOrders = await getOrdersFromFirestore();
+      let firestoreLogs = await getAuditLogsFromFirestore();
+      
+      if (firestoreOrders.length === 0) {
+        console.log('Firestore is empty. Fetching initial data from WebApp to populate Firestore...');
+        const liveData = await fetchLiveOrders(targetUrl);
+        firestoreOrders = liveData;
+        await syncOrdersToFirestore(liveData);
+        
+        const initialLogs = getStoredAuditLogs(liveData);
+        firestoreLogs = initialLogs;
+        await syncAuditLogsToFirestore(initialLogs);
+      }
+      
+      setOrders(firestoreOrders);
+      saveStoredOrders(firestoreOrders);
+      setAuditLogs(firestoreLogs);
+      saveStoredAuditLogs(firestoreLogs);
     } catch (err: any) {
-      console.error('Failed live sync, loading fallback data', err);
+      console.error('Failed Firestore or live sync, loading local storage fallback data', err);
       setSyncError(isHe 
-        ? 'חיבור לייב לגוגל שיטס נכשל. מציג נתונים שמורים מסנכרון אחרון.' 
-        : 'Live Google Sheet fetch failed. Showing last saved state.'
+        ? 'חיבור למאגר Firestore נכשל. מציג נתונים שמורים מסנכרון אחרון.' 
+        : 'Firestore database connection failed. Showing last saved state.'
       );
       const loadedOrders = getStoredOrders();
       setOrders(loadedOrders);
@@ -156,6 +180,10 @@ export default function App() {
       const liveData = await fetchLiveOrders(targetUrl);
       setOrders(liveData);
       saveStoredOrders(liveData);
+      
+      // Update Firestore with the fresh live orders list
+      await syncOrdersToFirestore(liveData);
+      
       console.log(isHe ? 'הנתונים סונכרנו בהצלחה!' : 'Logistics stream updated!');
     } catch (err: any) {
       setSyncError(err.message || String(err));
@@ -175,9 +203,10 @@ export default function App() {
     if (oldStatus === status) return;
 
     // Optimistically update local state
+    const updatedOrder = { ...targetOrder, status };
     const updated = orders.map(o => {
       if (o.id === orderId) {
-        return { ...o, status };
+        return updatedOrder;
       }
       return o;
     });
@@ -199,6 +228,14 @@ export default function App() {
     setAuditLogs(updatedLogs);
     saveStoredAuditLogs(updatedLogs);
 
+    // Save to Firestore
+    try {
+      await saveOrderToFirestore(updatedOrder);
+      await saveAuditLogToFirestore(newLog);
+    } catch (fsErr) {
+      console.error('Failed to save to Firestore:', fsErr);
+    }
+
     // Call live update API on the spreadsheet
     if (config.webappUrl) {
       try {
@@ -210,7 +247,7 @@ export default function App() {
   };
 
   // Delete an individual log locally
-  const handleDeleteOrder = (orderId: string) => {
+  const handleDeleteOrder = async (orderId: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
     const updated = orders.filter(o => o.id !== orderId);
     setOrders(updated);
@@ -230,6 +267,14 @@ export default function App() {
       const updatedLogs = [newLog, ...auditLogs];
       setAuditLogs(updatedLogs);
       saveStoredAuditLogs(updatedLogs);
+
+      // Save/Delete to Firestore
+      try {
+        await deleteOrderFromFirestore(orderId);
+        await saveAuditLogToFirestore(newLog);
+      } catch (fsErr) {
+        console.error('Failed to delete/audit to Firestore:', fsErr);
+      }
     }
   };
 
