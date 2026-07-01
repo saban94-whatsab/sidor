@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   ChevronDown, 
@@ -9,6 +9,8 @@ import {
   User, 
   Package, 
   ArrowUpDown, 
+  ArrowUp,
+  ArrowDown,
   AlertCircle,
   FileSpreadsheet,
   CheckCircle2,
@@ -35,7 +37,7 @@ interface DispatchTableProps {
   onSelectOrderNumber?: (orderNumber: string | null) => void;
 }
 
-type SortField = 'timestamp' | 'totalAmount' | 'customerName' | 'orderNumber' | 'predictedDelay';
+type SortField = 'timestamp' | 'totalAmount' | 'customerName' | 'orderNumber' | 'predictedDelay' | 'status';
 type SortOrder = 'asc' | 'desc';
 
 export default function DispatchTable({
@@ -50,15 +52,128 @@ export default function DispatchTable({
   const isHe = lang === 'he';
 
   // State for filtering/sorting
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedWarehouse, setSelectedWarehouse] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [selectedSku, setSelectedSku] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState(() => {
+    try {
+      return localStorage.getItem('dispatch_searchTerm') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string>(() => {
+    try {
+      return localStorage.getItem('dispatch_selectedWarehouse') || 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const [selectedStatus, setSelectedStatus] = useState<string>(() => {
+    try {
+      return localStorage.getItem('dispatch_selectedStatus') || 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const [startDate, setStartDate] = useState<string>(() => {
+    try {
+      return localStorage.getItem('dispatch_startDate') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [endDate, setEndDate] = useState<string>(() => {
+    try {
+      return localStorage.getItem('dispatch_endDate') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [selectedSku, setSelectedSku] = useState<string>(() => {
+    try {
+      return localStorage.getItem('dispatch_selectedSku') || 'all';
+    } catch {
+      return 'all';
+    }
+  });
   
-  const [sortField, setSortField] = useState<SortField>('timestamp');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [sortField, setSortField] = useState<SortField>(() => {
+    try {
+      return (localStorage.getItem('dispatch_sortField') as SortField) || 'timestamp';
+    } catch {
+      return 'timestamp';
+    }
+  });
+  const [sortOrder, setSortOrder] = useState<SortOrder>(() => {
+    try {
+      return (localStorage.getItem('dispatch_sortOrder') as SortOrder) || 'desc';
+    } catch {
+      return 'desc';
+    }
+  });
+
+  // Sync state changes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_searchTerm', searchTerm);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [searchTerm]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_selectedWarehouse', selectedWarehouse);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedWarehouse]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_selectedStatus', selectedStatus);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedStatus]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_startDate', startDate);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [startDate]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_endDate', endDate);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [endDate]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_selectedSku', selectedSku);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedSku]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_sortField', sortField);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [sortField]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dispatch_sortOrder', sortOrder);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [sortOrder]);
   
   // Expanded rows track
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
@@ -832,8 +947,14 @@ export default function DispatchTable({
                     onClick={() => handleSort('orderNumber')}
                   >
                     <div className="flex items-center gap-1">
-                      <span>{isHe ? 'מספר הזמנה' : 'Order #'}</span>
-                      <ArrowUpDown className="h-3 w-3" />
+                      <span className={sortField === 'orderNumber' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'מספר הזמנה' : 'Order #'}
+                      </span>
+                      {sortField === 'orderNumber' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
                     </div>
                   </th>
                   <th 
@@ -841,8 +962,14 @@ export default function DispatchTable({
                     onClick={() => handleSort('timestamp')}
                   >
                     <div className="flex items-center gap-1">
-                      <span>{isHe ? 'תאריך ושעה' : 'Timestamp'}</span>
-                      <ArrowUpDown className="h-3 w-3" />
+                      <span className={sortField === 'timestamp' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'תאריך ושעה' : 'Timestamp'}
+                      </span>
+                      {sortField === 'timestamp' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
                     </div>
                   </th>
                   <th 
@@ -850,8 +977,14 @@ export default function DispatchTable({
                     onClick={() => handleSort('customerName')}
                   >
                     <div className="flex items-center gap-1">
-                      <span>{isHe ? 'שם לקוח' : 'Customer Name'}</span>
-                      <ArrowUpDown className="h-3 w-3" />
+                      <span className={sortField === 'customerName' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'שם לקוח' : 'Customer Name'}
+                      </span>
+                      {sortField === 'customerName' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
                     </div>
                   </th>
                   <th className="py-3 px-4">{isHe ? 'מחסן הפצה' : 'Warehouse'}</th>
@@ -861,8 +994,14 @@ export default function DispatchTable({
                     onClick={() => handleSort('totalAmount')}
                   >
                     <div className="flex items-center justify-end gap-1">
-                      <span>{isHe ? 'סה"כ' : 'Total'}</span>
-                      <ArrowUpDown className="h-3 w-3" />
+                      <span className={sortField === 'totalAmount' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'סה"כ' : 'Total'}
+                      </span>
+                      {sortField === 'totalAmount' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
                     </div>
                   </th>
                   <th 
@@ -870,11 +1009,31 @@ export default function DispatchTable({
                     onClick={() => handleSort('predictedDelay')}
                   >
                     <div className="flex items-center justify-center gap-1">
-                      <span>{isHe ? 'צפי עיכוב / סיכון SLA' : 'SLA Breach Risk'}</span>
-                      <ArrowUpDown className="h-3 w-3" />
+                      <span className={sortField === 'predictedDelay' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'צפי עיכוב / סיכון SLA' : 'SLA Breach Risk'}
+                      </span>
+                      {sortField === 'predictedDelay' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
                     </div>
                   </th>
-                  <th className="py-3 px-4 text-center">{isHe ? 'סטטוס' : 'Status'}</th>
+                  <th 
+                    className="py-3 px-4 text-center cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('status')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      <span className={sortField === 'status' ? 'text-indigo-600 font-bold' : ''}>
+                        {isHe ? 'סטטוס' : 'Status'}
+                      </span>
+                      {sortField === 'status' ? (
+                        sortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-indigo-600" /> : <ArrowDown className="h-3 w-3 text-indigo-600" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 text-slate-300" />
+                      )}
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
