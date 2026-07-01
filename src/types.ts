@@ -42,3 +42,15 @@ export interface AppConfig {
   webappUrl: string;
   mode: 'mock' | 'live';
 }
+
+export interface AuditLogEntry {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  oldStatus: OrderStatus | 'created';
+  newStatus: OrderStatus;
+  timestamp: string;
+  updatedBy: string;
+}
+

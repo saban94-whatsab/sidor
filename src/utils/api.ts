@@ -1,4 +1,4 @@
-import { Order, OrderItem, OrderStatus, AppConfig, MetricSummary } from '../types';
+import { Order, OrderItem, OrderStatus, AppConfig, MetricSummary, AuditLogEntry } from '../types';
 
 // Default mock items for SabanOS Logistics
 export const MOCK_PRODUCTS = [
@@ -166,6 +166,94 @@ export function getStoredOrders(): Order[] {
 export function saveStoredOrders(orders: Order[]): void {
   localStorage.setItem(STORAGE_ORDERS_KEY, JSON.stringify(orders));
 }
+
+const STORAGE_AUDIT_LOGS_KEY = 'sabanos_audit_logs_v1';
+
+export function getStoredAuditLogs(currentOrders?: Order[]): AuditLogEntry[] {
+  const saved = localStorage.getItem(STORAGE_AUDIT_LOGS_KEY);
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {
+      // fallback
+    }
+  }
+
+  // Generate realistic initial logs from current orders if not provided
+  const orders = currentOrders || getStoredOrders();
+  const logs: AuditLogEntry[] = [];
+  
+  // Sort orders so we generate historic logs sequentially
+  const sorted = [...orders].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  sorted.forEach((order) => {
+    const baseTime = new Date(order.timestamp);
+    
+    // Creation log
+    logs.push({
+      id: `audit-${order.id}-created`,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      customerName: order.customerName,
+      oldStatus: 'created',
+      newStatus: 'pending',
+      timestamp: baseTime.toISOString(),
+      updatedBy: 'System'
+    });
+
+    if (order.status === 'processing' || order.status === 'delivered') {
+      const procTime = new Date(baseTime.getTime() + 45 * 60 * 1000); // +45 mins
+      logs.push({
+        id: `audit-${order.id}-processing`,
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        oldStatus: 'pending',
+        newStatus: 'processing',
+        timestamp: procTime.toISOString(),
+        updatedBy: 'Warehouse Agent'
+      });
+    }
+
+    if (order.status === 'delivered') {
+      const delivTime = new Date(baseTime.getTime() + 180 * 60 * 1000); // +3 hours
+      logs.push({
+        id: `audit-${order.id}-delivered`,
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        oldStatus: 'processing',
+        newStatus: 'delivered',
+        timestamp: delivTime.toISOString(),
+        updatedBy: 'Noa AI'
+      });
+    }
+
+    if (order.status === 'cancelled') {
+      const cancelTime = new Date(baseTime.getTime() + 120 * 60 * 1000); // +2 hours
+      logs.push({
+        id: `audit-${order.id}-cancelled`,
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        oldStatus: 'pending',
+        newStatus: 'cancelled',
+        timestamp: cancelTime.toISOString(),
+        updatedBy: 'Manager'
+      });
+    }
+  });
+
+  // Sort logs by timestamp descending so the newest audit is first
+  const sortedLogs = logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  localStorage.setItem(STORAGE_AUDIT_LOGS_KEY, JSON.stringify(sortedLogs));
+  return sortedLogs;
+}
+
+export function saveStoredAuditLogs(logs: AuditLogEntry[]): void {
+  localStorage.setItem(STORAGE_AUDIT_LOGS_KEY, JSON.stringify(logs));
+}
+
 
 // Map english translations for UI
 export const TRANSLATIONS_MAP: Record<string, string> = {

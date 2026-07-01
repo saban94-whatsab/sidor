@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Order, OrderStatus, Language } from '../types';
 import { translate, formatDate, MOCK_PRODUCTS } from '../utils/api';
+import { motion } from 'motion/react';
 
 interface DispatchTableProps {
   orders: Order[];
@@ -842,15 +843,22 @@ export default function DispatchTable({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
-                {filteredOrders.map((order) => {
+                {filteredOrders.map((order, idx) => {
                   const isExpanded = !!expandedOrders[order.id];
                   
                   return (
                     <React.Fragment key={order.id}>
-                      {/* Main Row */}
-                      <tr 
+                      {/* Main Row with polished staggered animation */}
+                      <motion.tr 
                         id={`order-row-${order.orderNumber}`}
                         onClick={() => toggleRow(order.id)}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ 
+                          duration: 0.25, 
+                          delay: Math.min(idx * 0.025, 0.35), 
+                          ease: "easeOut" 
+                        }}
                         className={`group cursor-pointer transition-all hover:bg-slate-50/80 ${
                           order.orderNumber === selectedOrderNumber
                             ? 'bg-amber-50 hover:bg-amber-100/90 ring-2 ring-amber-400 ring-offset-2 font-semibold shadow-md'
@@ -896,7 +904,7 @@ export default function DispatchTable({
                         <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
                           {renderStatusBadge(order.status)}
                         </td>
-                      </tr>
+                      </motion.tr>
 
                       {/* Expandable Details Row */}
                       {isExpanded && (

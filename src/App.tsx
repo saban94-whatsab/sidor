@@ -7,13 +7,16 @@ import {
   computeMetrics, 
   createRandomOrder, 
   fetchLiveOrders,
-  updateLiveOrderStatus
+  updateLiveOrderStatus,
+  getStoredAuditLogs,
+  saveStoredAuditLogs
 } from './utils/api';
-import { Order, AppConfig, Language, OrderStatus } from './types';
+import { Order, AppConfig, Language, OrderStatus, AuditLogEntry } from './types';
 import MetricCard from './components/MetricCard';
 import DispatchTable from './components/DispatchTable';
 import AnalyticsView from './components/AnalyticsView';
 import SettingsModal from './components/SettingsModal';
+import OrderHistoryView from './components/OrderHistoryView';
 
 import { 
   TrendingUp, 
@@ -35,7 +38,8 @@ import {
   Map,
   MapPin,
   MessageSquare,
-  Sparkles
+  Sparkles,
+  History
 } from 'lucide-react';
 
 import NoaChat from './components/NoaChat';
@@ -47,9 +51,10 @@ export default function App() {
   // Config & State
   const [config, setConfig] = useState<AppConfig>(getStoredConfig);
   const [lang, setLang] = useState<Language>('he');
-  const [currentTab, setCurrentTab] = useState<'dispatch' | 'analytics' | 'map' | 'noa-ai' | 'morning-report'>('dispatch');
+  const [currentTab, setCurrentTab] = useState<'dispatch' | 'analytics' | 'map' | 'noa-ai' | 'morning-report' | 'order-history'>('dispatch');
   const [selectedOrderNumber, setSelectedOrderNumber] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -73,13 +78,16 @@ export default function App() {
       const liveData = await fetchLiveOrders(targetUrl);
       setOrders(liveData);
       saveStoredOrders(liveData);
+      setAuditLogs(getStoredAuditLogs(liveData));
     } catch (err: any) {
       console.error('Failed live sync, loading fallback data', err);
       setSyncError(isHe 
         ? 'חיבור לייב לגוגל שיטס נכשל. מציג נתונים שמורים מסנכרון אחרון.' 
         : 'Live Google Sheet fetch failed. Showing last saved state.'
       );
-      setOrders(getStoredOrders());
+      const loadedOrders = getStoredOrders();
+      setOrders(loadedOrders);
+      setAuditLogs(getStoredAuditLogs(loadedOrders));
     }
     setIsLoading(false);
   };
@@ -109,6 +117,8 @@ export default function App() {
         setCurrentTab('noa-ai');
       } else if (key === 'r') {
         setCurrentTab('morning-report');
+      } else if (key === 'h') {
+        setCurrentTab('order-history');
       }
     };
 
@@ -141,6 +151,12 @@ export default function App() {
 
   // Update order status live in sheet
   const handleUpdateStatus = async (orderId: string, status: OrderStatus) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (!targetOrder) return;
+
+    const oldStatus = targetOrder.status;
+    if (oldStatus === status) return;
+
     // Optimistically update local state
     const updated = orders.map(o => {
       if (o.id === orderId) {
@@ -151,9 +167,23 @@ export default function App() {
     setOrders(updated);
     saveStoredOrders(updated);
 
+    // Write audit log entry
+    const newLog: AuditLogEntry = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      orderId: targetOrder.id,
+      orderNumber: targetOrder.orderNumber,
+      customerName: targetOrder.customerName,
+      oldStatus,
+      newStatus: status,
+      timestamp: new Date().toISOString(),
+      updatedBy: 'Dispatcher'
+    };
+    const updatedLogs = [newLog, ...auditLogs];
+    setAuditLogs(updatedLogs);
+    saveStoredAuditLogs(updatedLogs);
+
     // Call live update API on the spreadsheet
-    const targetOrder = orders.find(o => o.id === orderId);
-    if (targetOrder && config.webappUrl) {
+    if (config.webappUrl) {
       try {
         await updateLiveOrderStatus(config.webappUrl, targetOrder.orderNumber, status);
       } catch (err) {
@@ -164,9 +194,26 @@ export default function App() {
 
   // Delete an individual log locally
   const handleDeleteOrder = (orderId: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
     const updated = orders.filter(o => o.id !== orderId);
     setOrders(updated);
     saveStoredOrders(updated);
+
+    if (targetOrder) {
+      const newLog: AuditLogEntry = {
+        id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        orderId: targetOrder.id,
+        orderNumber: targetOrder.orderNumber,
+        customerName: targetOrder.customerName,
+        oldStatus: targetOrder.status,
+        newStatus: 'cancelled',
+        timestamp: new Date().toISOString(),
+        updatedBy: 'Manager (Removal)'
+      };
+      const updatedLogs = [newLog, ...auditLogs];
+      setAuditLogs(updatedLogs);
+      saveStoredAuditLogs(updatedLogs);
+    }
   };
 
   // Save modified configurations
@@ -335,6 +382,19 @@ export default function App() {
           >
             <Sparkles className="h-4.5 w-4.5 shrink-0 text-amber-400" />
             <span>{isHe ? 'דוח בוקר לוגיסטי' : 'Logistics Briefing'}</span>
+          </button>
+
+          <button
+            id="sidebar-history-btn"
+            onClick={() => setCurrentTab('order-history')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+              currentTab === 'order-history'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <History className="h-4.5 w-4.5 shrink-0" />
+            <span>{isHe ? 'היסטוריית סטטוסים' : 'Order History'}</span>
           </button>
         </nav>
 
@@ -694,6 +754,34 @@ export default function App() {
               />
             </div>
           )}
+
+          {currentTab === 'order-history' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900">
+                    {isHe ? 'יומן מעקב ושינויי סטטוסים' : 'Order Lifecycle Audit History'}
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {isHe 
+                      ? 'היסטוריית שינויי סטטוסים, עדכוני הפצה, שינויים שבוצעו על ידי מנהלים וסינכרונים בזמן אמת.' 
+                      : 'Audit trail tracking state changes, driver dispatches, and manual manager overrides.'}
+                  </p>
+                </div>
+              </div>
+
+              <OrderHistoryView
+                auditLogs={auditLogs}
+                lang={lang}
+                onSelectOrderNumber={(orderNum) => {
+                  setSelectedOrderNumber(orderNum);
+                  if (orderNum) {
+                    setCurrentTab('dispatch');
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Mobile bottom navigation tab bar */}
@@ -748,6 +836,19 @@ export default function App() {
           >
             <Sparkles className="h-4 w-4 text-amber-500" />
             <span>{isHe ? 'דוח בוקר' : 'Briefing'}</span>
+          </button>
+
+          <button
+            id="mob-tab-history-btn"
+            onClick={() => setCurrentTab('order-history')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 rounded-lg py-2 text-[10px] font-bold transition-all ${
+              currentTab === 'order-history'
+                ? 'bg-slate-100 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            <History className="h-4 w-4" />
+            <span>{isHe ? 'היסטוריה' : 'History'}</span>
           </button>
           
           <button
