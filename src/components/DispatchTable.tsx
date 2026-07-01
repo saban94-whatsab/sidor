@@ -566,22 +566,22 @@ export default function DispatchTable({
     const status = order.status;
     const config = {
       pending: {
-        bg: 'bg-amber-50 text-amber-700 border-amber-200',
+        bg: 'bg-amber-50/90 text-amber-800 border-amber-200 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-900/50',
         textHe: 'ממתין',
         textEn: 'Pending',
       },
       processing: {
-        bg: 'bg-blue-50 text-blue-700 border-blue-200',
+        bg: 'bg-blue-50/90 text-blue-800 border-blue-200 dark:bg-blue-950/20 dark:text-blue-400 dark:border-blue-900/50',
         textHe: 'בטיפול',
         textEn: 'Processing',
       },
       delivered: {
-        bg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        bg: 'bg-emerald-50/90 text-emerald-800 border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50',
         textHe: 'נמסר',
         textEn: 'Delivered',
       },
       cancelled: {
-        bg: 'bg-slate-50 text-slate-500 border-slate-200',
+        bg: 'bg-rose-50/90 text-rose-800 border-rose-200 dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900/50',
         textHe: 'בוטל',
         textEn: 'Cancelled',
       },

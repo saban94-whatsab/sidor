@@ -151,7 +151,8 @@ export function getStoredOrders(): Order[] {
   const saved = localStorage.getItem(STORAGE_ORDERS_KEY);
   if (saved) {
     try {
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved) as Order[];
+      return parsed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     } catch (e) {
       // fallback
     }
@@ -159,8 +160,9 @@ export function getStoredOrders(): Order[] {
   
   // Initialize with generateMockOrders and save
   const mock = generateMockOrders();
-  localStorage.setItem(STORAGE_ORDERS_KEY, JSON.stringify(mock));
-  return mock;
+  const sortedMock = mock.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  localStorage.setItem(STORAGE_ORDERS_KEY, JSON.stringify(sortedMock));
+  return sortedMock;
 }
 
 export function saveStoredOrders(orders: Order[]): void {
@@ -509,7 +511,7 @@ export async function fetchLiveOrders(webappUrl?: string): Promise<Order[]> {
       throw new Error('Response is not in array format');
     }
 
-    return rawList.map((row: any, idx: number) => {
+    const parsedOrders = rawList.map((row: any, idx: number) => {
       if (Array.isArray(row)) {
         // Fallback for raw double arrays [timestamp, orderNumber, customerName, warehouse, deliveryAddress, itemsRaw, statusRaw, modelUsed, tokens, messageId]
         const timestamp = row[0] ? new Date(row[0]).toISOString() : new Date().toISOString();
@@ -590,6 +592,8 @@ export async function fetchLiveOrders(webappUrl?: string): Promise<Order[]> {
         };
       }
     });
+
+    return parsedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   } catch (error) {
     console.error('Failed to fetch live orders:', error);
