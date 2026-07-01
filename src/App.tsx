@@ -1,0 +1,622 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  getStoredConfig, 
+  saveStoredConfig, 
+  getStoredOrders, 
+  saveStoredOrders, 
+  computeMetrics, 
+  createRandomOrder, 
+  fetchLiveOrders,
+  updateLiveOrderStatus
+} from './utils/api';
+import { Order, AppConfig, Language, OrderStatus } from './types';
+import MetricCard from './components/MetricCard';
+import DispatchTable from './components/DispatchTable';
+import AnalyticsView from './components/AnalyticsView';
+import SettingsModal from './components/SettingsModal';
+
+import { 
+  TrendingUp, 
+  DollarSign, 
+  Building2, 
+  Clock, 
+  Truck, 
+  CheckCircle2, 
+  AlertTriangle,
+  LayoutDashboard,
+  BarChart3,
+  Settings,
+  RefreshCw,
+  PlusCircle,
+  Globe,
+  User,
+  Shield,
+  Users,
+  Map,
+  MapPin
+} from 'lucide-react';
+
+const OrderMap = React.lazy(() => import('./components/OrderMap'));
+
+export default function App() {
+  // Config & State
+  const [config, setConfig] = useState<AppConfig>(getStoredConfig);
+  const [lang, setLang] = useState<Language>('he');
+  const [currentTab, setCurrentTab] = useState<'dispatch' | 'analytics' | 'map'>('dispatch');
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<string>('all');
+
+  const isHe = lang === 'he';
+
+  // Load orders on startup
+  useEffect(() => {
+    loadInitialData();
+  }, [config.webappUrl]);
+
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    setSyncError(null);
+    
+    const targetUrl = config.webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+    
+    try {
+      const liveData = await fetchLiveOrders(targetUrl);
+      setOrders(liveData);
+      saveStoredOrders(liveData);
+    } catch (err: any) {
+      console.error('Failed live sync, loading fallback data', err);
+      setSyncError(isHe 
+        ? 'חיבור לייב לגוגל שיטס נכשל. מציג נתונים שמורים מסנכרון אחרון.' 
+        : 'Live Google Sheet fetch failed. Showing last saved state.'
+      );
+      setOrders(getStoredOrders());
+    }
+    setIsLoading(false);
+  };
+
+  // Pull refresh trigger
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setSyncError(null);
+
+    const targetUrl = config.webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+    
+    try {
+      const liveData = await fetchLiveOrders(targetUrl);
+      setOrders(liveData);
+      saveStoredOrders(liveData);
+      console.log(isHe ? 'הנתונים סונכרנו בהצלחה!' : 'Logistics stream updated!');
+    } catch (err: any) {
+      setSyncError(err.message || String(err));
+    }
+
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 600);
+  };
+
+  // Update order status live in sheet
+  const handleUpdateStatus = async (orderId: string, status: OrderStatus) => {
+    // Optimistically update local state
+    const updated = orders.map(o => {
+      if (o.id === orderId) {
+        return { ...o, status };
+      }
+      return o;
+    });
+    setOrders(updated);
+    saveStoredOrders(updated);
+
+    // Call live update API on the spreadsheet
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (targetOrder && config.webappUrl) {
+      try {
+        await updateLiveOrderStatus(config.webappUrl, targetOrder.orderNumber, status);
+      } catch (err) {
+        console.error('Failed to sync status update to live sheet:', err);
+      }
+    }
+  };
+
+  // Delete an individual log locally
+  const handleDeleteOrder = (orderId: string) => {
+    const updated = orders.filter(o => o.id !== orderId);
+    setOrders(updated);
+    saveStoredOrders(updated);
+  };
+
+  // Save modified configurations
+  const handleSaveConfig = (newConfig: AppConfig) => {
+    setConfig(newConfig);
+    saveStoredConfig(newConfig);
+  };
+
+  // Memoized unique months from orders
+  const months = useMemo(() => {
+    const list = new Set<string>();
+    orders.forEach(o => {
+      if (o.timestamp) {
+        const d = new Date(o.timestamp);
+        if (!isNaN(d.getTime())) {
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          list.add(key);
+        }
+      }
+    });
+    return Array.from(list).sort().reverse();
+  }, [orders]);
+
+  // Translate month keys to elegant name
+  const getMonthName = (yearMonth: string, isHeMode: boolean) => {
+    const parts = yearMonth.split('-');
+    if (parts.length < 2) return yearMonth;
+    const year = parts[0];
+    const monthStr = parts[1];
+    const monthNamesHe: Record<string, string> = {
+      '01': 'ינואר', '02': 'פברואר', '03': 'מרץ', '04': 'אפריל', '05': 'מאי', '06': 'יוני',
+      '07': 'יולי', '08': 'אוגוסט', '09': 'ספטמבר', '10': 'אוקטובר', '11': 'נובמבר', '12': 'דצמבר'
+    };
+    const monthNamesEn: Record<string, string> = {
+      '01': 'January', '02': 'February', '03': 'March', '04': 'April', '05': 'May', '06': 'June',
+      '07': 'July', '08': 'August', '09': 'September', '10': 'October', '11': 'November', '12': 'December'
+    };
+    return isHeMode
+      ? `${monthNamesHe[monthStr] || monthStr} ${year}`
+      : `${monthNamesEn[monthStr] || monthStr} ${year}`;
+  };
+
+  // Memoized unique customer count based on selectedMonth
+  const filteredCustomerCount = useMemo(() => {
+    const activeOrders = orders.filter(o => o.status !== 'cancelled');
+    const targetOrders = selectedMonth === 'all'
+      ? activeOrders
+      : activeOrders.filter(o => {
+          if (!o.timestamp) return false;
+          const d = new Date(o.timestamp);
+          if (isNaN(d.getTime())) return false;
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          return key === selectedMonth;
+        });
+    return new Set(targetOrders.map(o => o.customerName)).size;
+  }, [orders, selectedMonth]);
+
+  // Active undelivered orders for HaCharash Warehouse
+  const charashActiveCount = useMemo(() => {
+    return orders.filter(o => {
+      const isCharash = o.warehouse.includes('החרש') || o.warehouse.toLowerCase().includes('charash');
+      const isNotDelivered = o.status !== 'delivered' && o.status !== 'cancelled';
+      return isCharash && isNotDelivered;
+    }).length;
+  }, [orders]);
+
+  // Active undelivered orders for HaTalmid Warehouse
+  const talmidActiveCount = useMemo(() => {
+    return orders.filter(o => {
+      const isTalmid = o.warehouse.includes('התלמיד') || o.warehouse.toLowerCase().includes('talmid');
+      const isNotDelivered = o.status !== 'delivered' && o.status !== 'cancelled';
+      return isTalmid && isNotDelivered;
+    }).length;
+  }, [orders]);
+
+  // Memoized metric calculations
+  const metrics = useMemo(() => computeMetrics(orders), [orders]);
+
+  return (
+    <div 
+      dir={isHe ? 'rtl' : 'ltr'} 
+      className="flex h-screen w-full overflow-hidden bg-slate-50/80 font-sans text-slate-900 antialiased"
+    >
+      {/* 1. Elegant Dashboard Sidebar (Desktop Only) */}
+      <aside className="w-64 bg-slate-900 flex flex-col text-slate-300 shrink-0 hidden md:flex">
+        {/* Brand Header */}
+        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 shadow-md shadow-blue-500/20">
+            <span className="font-mono text-lg font-bold tracking-tight text-white">S</span>
+          </div>
+          <div>
+            <h1 className="font-sans text-lg font-extrabold tracking-tight text-white leading-none">
+              Saban<span className="text-blue-500">OS</span>
+            </h1>
+            <p className="text-[10px] font-medium text-slate-500 mt-1 uppercase tracking-wider">
+              {isHe ? 'לוגיסטיקה ושרשרת אספקה' : 'Logistics Control'}
+            </p>
+          </div>
+        </div>
+
+        {/* Sidebar Navigation Links */}
+        <nav className="flex-1 px-4 py-6 space-y-1">
+          <button
+            id="sidebar-dispatch-btn"
+            onClick={() => setCurrentTab('dispatch')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+              currentTab === 'dispatch'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <LayoutDashboard className="h-4.5 w-4.5 shrink-0" />
+            <span>{isHe ? 'לוח סידור ראשי' : 'Dispatch Control'}</span>
+          </button>
+          
+          <button
+            id="sidebar-analytics-btn"
+            onClick={() => setCurrentTab('analytics')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+              currentTab === 'analytics'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <BarChart3 className="h-4.5 w-4.5 shrink-0" />
+            <span>{isHe ? 'דוחות וניתוח מוצרים' : 'Product Analytics'}</span>
+          </button>
+
+          <button
+            id="sidebar-map-btn"
+            onClick={() => setCurrentTab('map')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-all ${
+              currentTab === 'map'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Map className="h-4.5 w-4.5 shrink-0" />
+            <span>{isHe ? 'מפת סידור הפצה' : 'Logistics Map'}</span>
+          </button>
+        </nav>
+
+        {/* Shift Manager Block (Footer) */}
+        <div className="p-4 border-t border-slate-800 bg-slate-950/40">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+              <User className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-white">{isHe ?' ראמי מסארוה' : 'Avi Cohen'}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <p className="text-[10px] font-medium text-slate-500">{isHe ? 'מנהל תורן פעיל' : 'Active Shift Manager'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* 2. Main Column Viewport */}
+      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        
+        {/* Top Header Row */}
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 lg:px-8 shrink-0">
+          <div className="flex items-center gap-3">
+            {/* Left brand indicator for mobile */}
+            <div className="flex md:hidden h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
+              <span className="font-mono text-base font-bold text-white">S</span>
+            </div>
+            
+            {/* Status Badge */}
+            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                {isHe ? 'מחובר (Google Sheets)' : 'Live Sheets'}
+              </span>
+            </span>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2">
+            {/* Refresh stream */}
+            <button
+              id="header-refresh-btn"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all ${
+                isRefreshing ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+              title={isHe ? 'רענן נתונים' : 'Refresh Data'}
+            >
+              <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+
+            {/* Language Toggle */}
+            <button
+              id="header-lang-btn"
+              onClick={() => setLang(isHe ? 'en' : 'he')}
+              className="flex items-center gap-1 h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
+            >
+              <Globe className="h-3.5 w-3.5" />
+              <span>{isHe ? 'EN' : 'עב'}</span>
+            </button>
+
+            {/* Settings */}
+            <button
+              id="header-settings-btn"
+              onClick={() => setIsSettingsOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
+              title={isHe ? 'הגדרות סנכרון' : 'Sync Configurations'}
+            >
+              <Settings className="h-4 w-4 text-slate-500" />
+            </button>
+          </div>
+        </header>
+
+        {/* Scrollable Main Workspace */}
+        <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-6">
+          {/* Connection Failure Error banner */}
+          {syncError && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-800 flex items-start gap-3 shadow-sm">
+              <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <span className="font-bold">{isHe ? 'שגיאת סנכרון לוגיסטי:' : 'Sync Alert:'}</span>
+                <p className="mt-0.5 opacity-90">{syncError}</p>
+              </div>
+              <button 
+                onClick={() => setSyncError(null)}
+                className="mr-auto text-rose-400 hover:text-rose-700 font-bold text-xs"
+              >
+                {isHe ? 'סגור' : 'Dismiss'}
+              </button>
+            </div>
+          )}
+
+          {/* Top KPI Metrics Row */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <MetricCard
+              title={isHe ? 'סה"כ הזמנות הפצה' : 'Total Logistics Orders'}
+              value={metrics.totalOrders}
+              subtitle={isHe ? 'כלל המשלוחים' : 'All shipment logs'}
+              icon={Truck}
+              colorScheme="indigo"
+              isLoading={isLoading}
+            />
+            {/* Dynamic Customer Count with Month Filter */}
+            {isLoading ? (
+              <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm animate-pulse">
+                <div className="relative flex items-start justify-between">
+                  <div className="space-y-2 w-2/3">
+                    <div className="h-3.5 w-1/2 rounded bg-slate-200" />
+                    <div className="h-7 w-2/3 rounded bg-slate-200 mt-1" />
+                  </div>
+                  <div className="h-10 w-10 rounded-lg bg-slate-100 border border-slate-200" />
+                </div>
+                <div className="relative mt-3.5 flex items-center justify-between border-t border-slate-100 pt-2.5">
+                  <div className="h-3 w-1/3 rounded bg-slate-100" />
+                  <div className="h-4 w-1/4 rounded bg-slate-100" />
+                </div>
+              </div>
+            ) : (
+              <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-slate-300">
+                <div className="absolute -right-12 -top-12 h-32 w-32 rounded-full bg-gradient-to-br from-emerald-500/5 to-transparent blur-xl" />
+                <div className="relative flex items-start justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {isHe ? 'כמות לקוחות פעילים' : 'Active Customer Count'}
+                    </span>
+                    <h3 className="font-sans text-2xl font-bold tracking-tight text-slate-900">
+                      {filteredCustomerCount}
+                    </h3>
+                  </div>
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50/70 border border-emerald-100 shadow-inner">
+                    <Users className="h-4.5 w-4.5 text-emerald-600" />
+                  </div>
+                </div>
+                <div className="relative mt-3.5 flex items-center justify-between border-t border-slate-100 pt-2.5">
+                  <span className="text-[10px] font-semibold text-slate-500">
+                    {isHe ? 'סנן לפי חודש:' : 'Filter by month:'}
+                  </span>
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="text-[10px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    <option value="all">{isHe ? 'כל החודשים' : 'All Months'}</option>
+                    {months.map(m => (
+                      <option key={m} value={m}>{getMonthName(m, isHe)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Improved Active Warehouses displaying HaCharash & HaTalmid counts */}
+            {isLoading ? (
+              <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm animate-pulse">
+                <div className="relative flex items-start justify-between">
+                  <div className="space-y-2 w-2/3">
+                    <div className="h-3.5 w-1/2 rounded bg-slate-200" />
+                    <div className="h-3 w-1/3 rounded bg-slate-100 mt-1" />
+                  </div>
+                  <div className="h-10 w-10 rounded-lg bg-slate-100 border border-slate-200" />
+                </div>
+                <div className="relative mt-2.5 space-y-2 pt-2.5 border-t border-slate-100">
+                  <div className="h-4 w-full rounded bg-slate-100" />
+                  <div className="h-4 w-full rounded bg-slate-100" />
+                </div>
+              </div>
+            ) : (
+              <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:border-slate-300">
+                <div className="absolute -right-12 -top-12 h-32 w-32 rounded-full bg-gradient-to-br from-blue-500/5 to-transparent blur-xl" />
+                <div className="relative flex items-start justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {isHe ? 'מחסנים פעילים בסידור' : 'Active Storage Hubs'}
+                    </span>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        {isHe ? 'הזמנות שלא סופקו' : 'Undelivered Orders'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50/70 border border-blue-100 shadow-inner">
+                    <Building2 className="h-4.5 w-4.5 text-blue-600" />
+                  </div>
+                </div>
+                
+                <div className="relative mt-2.5 space-y-2 pt-2.5 border-t border-slate-100">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-700">{isHe ? 'מחסן החרש' : 'HaCharash Hub'}</span>
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-orange-50 text-orange-700 border border-orange-100">
+                      {charashActiveCount} {isHe ? 'הזמנות' : 'orders'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-700">{isHe ? 'מחסן התלמיד' : 'HaTalmid Hub'}</span>
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                      {talmidActiveCount} {isHe ? 'הזמנות' : 'orders'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+            <MetricCard
+              title={isHe ? 'משלוחים בצנרת (בקבוק)' : 'Active Dispatch Pipeline'}
+              value={metrics.pendingDeliveries}
+              subtitle={isHe ? 'ממתין + בטיפול' : 'Awaiting loading / route'}
+              icon={Clock}
+              colorScheme="amber"
+              isLoading={isLoading}
+            />
+          </div>
+
+          {/* Main Tab content rendering */}
+          {currentTab === 'dispatch' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900">
+                    {isHe ? 'לוח סידור הפצה ראשי' : 'Main Dispatch Control'}
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {isHe 
+                      ? 'ניהול, סינון ועדכון בזמן אמת של סחורות, מחסנים ויעדי לקוחות קצה.' 
+                      : 'Manage fulfillment pipelines, dispatch status updates, and custom carrier routing.'}
+                  </p>
+                </div>
+              </div>
+              
+              <DispatchTable
+                orders={orders}
+                onUpdateStatus={handleUpdateStatus}
+                onDeleteOrder={handleDeleteOrder}
+                lang={lang}
+                isLoading={isLoading}
+              />
+            </div>
+          )}
+
+          {currentTab === 'analytics' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900">
+                    {isHe ? 'דוחות וניתוח מוצרים' : 'Product Analytics Dashboard'}
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {isHe 
+                      ? 'ניתוח קשרי לקוחות, מוצרים מבוקשים והתפלגות עומס לוגיסטי בין המחסנים.' 
+                      : 'Evaluates fulfillment speed, high-demand SKUs, and storage hub loading metrics.'}
+                  </p>
+                </div>
+              </div>
+
+              <AnalyticsView
+                orders={orders}
+                lang={lang}
+              />
+            </div>
+          )}
+
+          {currentTab === 'map' && (
+            <div className="space-y-4 animate-fade-in h-full flex flex-col min-h-0">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 shrink-0">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-900">
+                    {isHe ? 'מפת סידור הפצה אינטראקטיבית' : 'Interactive Dispatch Map'}
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    {isHe 
+                      ? 'ניטור גיאוגרפי של יעדי המשלוח, פריסת מחסנים ומיקומי סיכות לקוח בזמן אמת.' 
+                      : 'Real-time geographic tracking of customer delivery endpoints and origin warehouse hubs.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-[450px] relative rounded-xl overflow-hidden border border-slate-200 shadow-sm bg-white">
+                <React.Suspense fallback={
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-slate-500 gap-3 font-sans" dir="rtl">
+                    <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+                    <p className="text-xs font-bold">{isHe ? 'טוען מפת הפצה...' : 'Loading interactive map...'}</p>
+                  </div>
+                }>
+                  <OrderMap
+                    orders={orders}
+                    lang={lang}
+                    isLoading={isLoading}
+                  />
+                </React.Suspense>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Mobile bottom navigation tab bar */}
+        <div className="flex md:hidden border-t border-slate-200 bg-white p-1 justify-center gap-1 shrink-0">
+          <button
+            id="mob-tab-dispatch-btn"
+            onClick={() => setCurrentTab('dispatch')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 rounded-lg py-2 text-[11px] font-bold transition-all ${
+              currentTab === 'dispatch'
+                ? 'bg-slate-100 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            <LayoutDashboard className="h-4 w-4" />
+            <span>{isHe ? 'לוח סידור' : 'Dispatch'}</span>
+          </button>
+
+          <button
+            id="mob-tab-map-btn"
+            onClick={() => setCurrentTab('map')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 rounded-lg py-2 text-[11px] font-bold transition-all ${
+              currentTab === 'map'
+                ? 'bg-slate-100 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            <Map className="h-4 w-4" />
+            <span>{isHe ? 'מפת סידור' : 'Map'}</span>
+          </button>
+          
+          <button
+            id="mob-tab-analytics-btn"
+            onClick={() => setCurrentTab('analytics')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 rounded-lg py-2 text-[11px] font-bold transition-all ${
+              currentTab === 'analytics'
+                ? 'bg-slate-100 text-blue-600'
+                : 'text-slate-600'
+            }`}
+          >
+            <BarChart3 className="h-4 w-4" />
+            <span>{isHe ? 'ניתוח נתונים' : 'Analytics'}</span>
+          </button>
+        </div>
+      </main>
+
+      {/* Connection & Setup Config Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        config={config}
+        onSaveConfig={handleSaveConfig}
+        lang={lang}
+      />
+    </div>
+  );
+}

@@ -1,0 +1,1097 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  Search, 
+  ChevronDown, 
+  ChevronUp, 
+  Building2, 
+  MapPin, 
+  Clock, 
+  User, 
+  Package, 
+  ArrowUpDown, 
+  AlertCircle,
+  FileSpreadsheet,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Trash2,
+  Calendar,
+  Filter,
+  X,
+  Activity,
+  AlertTriangle
+} from 'lucide-react';
+import { Order, OrderStatus, Language } from '../types';
+import { translate, formatDate, MOCK_PRODUCTS } from '../utils/api';
+
+interface DispatchTableProps {
+  orders: Order[];
+  onUpdateStatus: (orderId: string, status: OrderStatus) => void;
+  onDeleteOrder?: (orderId: string) => void;
+  lang: Language;
+  isLoading: boolean;
+}
+
+type SortField = 'timestamp' | 'totalAmount' | 'customerName' | 'orderNumber' | 'predictedDelay';
+type SortOrder = 'asc' | 'desc';
+
+export default function DispatchTable({
+  orders,
+  onUpdateStatus,
+  onDeleteOrder,
+  lang,
+  isLoading,
+}: DispatchTableProps) {
+  const isHe = lang === 'he';
+
+  // State for filtering/sorting
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string>('all');
+  const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [selectedSku, setSelectedSku] = useState<string>('all');
+  
+  const [sortField, setSortField] = useState<SortField>('timestamp');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  
+  // Expanded rows track
+  const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
+
+  // Compile list of unique SKUs for filters from products and orders
+  const uniqueSkus = useMemo(() => {
+    const map = new Map<string, string>();
+    // Pre-populate with our standard products
+    MOCK_PRODUCTS.forEach(p => {
+      map.set(p.sku, p.name);
+    });
+    // Add any from current orders to be fully dynamic
+    orders.forEach(o => {
+      o.items.forEach(item => {
+        if (item.sku && !map.has(item.sku)) {
+          map.set(item.sku, item.name);
+        }
+      });
+    });
+    return Array.from(map.entries()).map(([sku, name]) => ({ sku, name }));
+  }, [orders]);
+
+  // Get unique warehouses for filters
+  const uniqueWarehouses = ['all', ...Array.from(new Set(orders.map(o => o.warehouse)))];
+
+  // Helper to extract city from address
+  const getCityFromAddress = (address: string): string => {
+    if (!address) return 'אחר';
+    const knownCities = ['תל אביב', 'ירושלים', 'חיפה', 'אשדוד', 'באר שבע', 'מודיעין', 'ראשון לציון', 'חולון'];
+    for (const city of knownCities) {
+      if (address.includes(city)) return city;
+    }
+    const englishCities: Record<string, string> = {
+      'tel aviv': 'תל אביב',
+      'jerusalem': 'ירושלים',
+      'haifa': 'חיפה',
+      'ashdod': 'אשדוד',
+      'beer sheva': 'באר שבע',
+      'modiin': 'מודיעין',
+      'rishon lezion': 'ראשון לציון',
+      'holon': 'חולון'
+    };
+    const lowerAddress = address.toLowerCase();
+    for (const [eng, heb] of Object.entries(englishCities)) {
+      if (lowerAddress.includes(eng)) return heb;
+    }
+    return 'אחר';
+  };
+
+  // Operational Time Analysis and SLA Breach Risk Engine
+  const orderDelayMetrics = useMemo(() => {
+    const metricsMap: Record<string, {
+      standardProcessingTime: number;
+      slaWindow: number;
+      elapsedHours: number;
+      riskScore: number;
+      riskCategory: 'breached' | 'high' | 'medium' | 'safe' | 'delivered' | 'cancelled';
+      reasonHe: string;
+      reasonEn: string;
+    }> = {};
+
+    // Compute active load queues per warehouse to factor into queue delay
+    const queueCounts: Record<string, number> = {};
+    orders.forEach(o => {
+      if (o.status === 'pending' || o.status === 'processing') {
+        const wh = o.warehouse || '';
+        queueCounts[wh] = (queueCounts[wh] || 0) + 1;
+      }
+    });
+
+    orders.forEach(order => {
+      if (order.status === 'cancelled') {
+        metricsMap[order.id] = {
+          standardProcessingTime: 0,
+          slaWindow: 0,
+          elapsedHours: 0,
+          riskScore: 0,
+          riskCategory: 'cancelled',
+          reasonHe: 'בוטל על ידי המשלח',
+          reasonEn: 'Cancelled by dispatcher'
+        };
+        return;
+      }
+
+      if (order.status === 'delivered') {
+        metricsMap[order.id] = {
+          standardProcessingTime: 0,
+          slaWindow: 0,
+          elapsedHours: 0,
+          riskScore: 0,
+          riskCategory: 'delivered',
+          reasonHe: 'נמסר ליעד בהצלחה',
+          reasonEn: 'Delivered successfully'
+        };
+        return;
+      }
+
+      // 1. Standard Processing Duration based on warehouse, load, items, and volume
+      let baseRate = 2.5; // base standard handling hours
+      const wh = order.warehouse || '';
+      const isCharash = wh.includes('החרש') || wh.toLowerCase().includes('charash');
+      const isTalmid = wh.includes('התלמיד') || wh.toLowerCase().includes('talmid');
+      
+      if (isCharash) baseRate = 2.0; // High-efficiency automatic wrap
+      else if (isTalmid) baseRate = 3.5; // Heavier industrial cargo
+
+      const queueCount = queueCounts[wh] || 0;
+      const itemTypesCount = order.items?.length || 0;
+      const totalUnits = order.items?.reduce((sum, item) => sum + (item.quantity || 0), 0) || 0;
+
+      // Statistical Duration Formula (Hours)
+      const standardProcessingTime = baseRate + (queueCount * 0.25) + (itemTypesCount * 0.35) + (totalUnits * 0.015);
+
+      // 2. SLA Commitment Window (Hours) based on distance/location
+      const city = getCityFromAddress(order.deliveryAddress);
+      let slaWindow = 18; // Standard default window
+      if (['תל אביב', 'חולון', 'ראשון לציון', 'מודיעין'].includes(city)) {
+        slaWindow = 12; // Local metro area
+      } else if (['ירושלים', 'חיפה', 'אשדוד', 'באר שבע'].includes(city)) {
+        slaWindow = 24; // Outlying districts
+      }
+
+      // 3. Operational Elapsed Duration (simulate with respect to 2026-06-29 current time if possible, or live Date.now())
+      const orderTime = new Date(order.timestamp).getTime();
+      const elapsedMs = Date.now() - orderTime;
+      const elapsedHours = Math.max(0, elapsedMs / (1000 * 60 * 60));
+
+      // 4. Probability Score & Classification
+      const riskScore = Math.round((elapsedHours / slaWindow) * 100);
+
+      let riskCategory: 'breached' | 'high' | 'medium' | 'safe' = 'safe';
+      if (elapsedHours > slaWindow) {
+        riskCategory = 'breached';
+      } else if (elapsedHours / slaWindow >= 0.75) {
+        riskCategory = 'high';
+      } else if (elapsedHours / slaWindow >= 0.40) {
+        riskCategory = 'medium';
+      }
+
+      // 5. Narrative Explanation of Bottlenecks
+      let reasonHe = '';
+      let reasonEn = '';
+
+      if (riskCategory === 'breached') {
+        const overBy = (elapsedHours - slaWindow).toFixed(1);
+        reasonHe = `חריגת SLA של ${overBy} שעות`;
+        reasonEn = `SLA breached by ${overBy} hrs`;
+      } else {
+        const partsHe = [];
+        const partsEn = [];
+        if (isTalmid) {
+          partsHe.push('מחסן התלמיד (עמוס)');
+          partsEn.push('Talmid Hub load');
+        }
+        if (queueCount > 3) {
+          partsHe.push('תור משלוחים ארוך');
+          partsEn.push('Queue delays');
+        }
+        if (totalUnits > 40) {
+          partsHe.push('נפח פריטים חריג');
+          partsEn.push('High pallet volume');
+        }
+
+        if (partsHe.length > 0) {
+          reasonHe = partsHe.join(' + ');
+          reasonEn = partsEn.join(' + ');
+        } else {
+          reasonHe = 'זמני טיפול תקינים';
+          reasonEn = 'Nominal transit times';
+        }
+      }
+
+      metricsMap[order.id] = {
+        standardProcessingTime: Math.round(standardProcessingTime * 10) / 10,
+        slaWindow,
+        elapsedHours: Math.round(elapsedHours * 10) / 10,
+        riskScore,
+        riskCategory,
+        reasonHe,
+        reasonEn
+      };
+    });
+
+    return metricsMap;
+  }, [orders]);
+
+  // Predefined date preset handler
+  const handleDatePreset = (preset: 'all' | 'today' | '7days' | '30days') => {
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    
+    if (preset === 'all') {
+      setStartDate('');
+      setEndDate('');
+    } else if (preset === 'today') {
+      setStartDate(todayStr);
+      setEndDate(todayStr);
+    } else if (preset === '7days') {
+      const past = new Date();
+      past.setDate(past.getDate() - 7);
+      setStartDate(past.toISOString().split('T')[0]);
+      setEndDate(todayStr);
+    } else if (preset === '30days') {
+      const past = new Date();
+      past.setDate(past.getDate() - 30);
+      setStartDate(past.toISOString().split('T')[0]);
+      setEndDate(todayStr);
+    }
+  };
+
+  // Clear all filters
+  const resetFilters = () => {
+    setSearchTerm('');
+    setSelectedWarehouse('all');
+    setSelectedStatus('all');
+    setStartDate('');
+    setEndDate('');
+    setSelectedSku('all');
+  };
+
+  // Toggle row expansion
+  const toggleRow = (id: string) => {
+    setExpandedOrders(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  // Toggle sort
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('desc');
+    }
+  };
+
+  // Filter & Sort logic
+  const filteredOrders = orders
+    .filter(order => {
+      const matchSearch = 
+        order.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        translate(order.customerName, 'en').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.deliveryAddress.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        translate(order.deliveryAddress, 'en').toLowerCase().includes(searchTerm.toLowerCase());
+        
+      const matchWarehouse = selectedWarehouse === 'all' || order.warehouse === selectedWarehouse;
+      const matchStatus = selectedStatus === 'all' || order.status === selectedStatus;
+
+      // Date Range Match
+      let matchDate = true;
+      const orderTime = new Date(order.timestamp).getTime();
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        if (orderTime < start.getTime()) matchDate = false;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        if (orderTime > end.getTime()) matchDate = false;
+      }
+
+      // SKU Specific Match
+      let matchSku = true;
+      if (selectedSku !== 'all') {
+        matchSku = order.items.some(item => item.sku === selectedSku);
+      }
+
+      return matchSearch && matchWarehouse && matchStatus && matchDate && matchSku;
+    })
+    .sort((a, b) => {
+      if (sortField === 'predictedDelay') {
+        const scoreA = orderDelayMetrics[a.id]?.riskScore || 0;
+        const scoreB = orderDelayMetrics[b.id]?.riskScore || 0;
+        return sortOrder === 'asc' ? scoreA - scoreB : scoreB - scoreA;
+      }
+
+      let aVal: any = a[sortField as any];
+      let bVal: any = b[sortField as any];
+
+      // Format custom string comparisons
+      if (sortField === 'timestamp') {
+        aVal = new Date(a.timestamp).getTime();
+        bVal = new Date(b.timestamp).getTime();
+      }
+
+      if (typeof aVal === 'string') {
+        return sortOrder === 'asc' 
+          ? aVal.localeCompare(bVal, isHe ? 'he' : 'en')
+          : bVal.localeCompare(aVal, isHe ? 'he' : 'en');
+      } else {
+        return sortOrder === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+    });
+
+  // Render predicted delay badge
+  const renderDelayFlag = (orderId: string) => {
+    const data = orderDelayMetrics[orderId];
+    if (!data) return null;
+
+    const { riskCategory, riskScore, reasonHe, reasonEn } = data;
+    const reason = isHe ? reasonHe : reasonEn;
+
+    let badgeClass = '';
+    let text = '';
+    let dotClass = '';
+
+    if (riskCategory === 'cancelled') {
+      badgeClass = 'bg-slate-50 text-slate-400 border-slate-200';
+      text = isHe ? 'בוטל' : 'Cancelled';
+      dotClass = 'bg-slate-300';
+    } else if (riskCategory === 'delivered') {
+      badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      text = isHe ? 'הושלם ב-SLA' : 'SLA Met';
+      dotClass = 'bg-emerald-500';
+    } else if (riskCategory === 'breached') {
+      badgeClass = 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse';
+      text = isHe ? 'חריגת SLA!' : 'SLA Breached!';
+      dotClass = 'bg-rose-600';
+    } else if (riskCategory === 'high') {
+      badgeClass = 'bg-orange-50 text-orange-700 border-orange-200';
+      text = isHe ? 'סיכון גבוה' : 'High Risk';
+      dotClass = 'bg-orange-500';
+    } else if (riskCategory === 'medium') {
+      badgeClass = 'bg-amber-50 text-amber-700 border-amber-200';
+      text = isHe ? 'סיכון בינוני' : 'Medium Risk';
+      dotClass = 'bg-amber-500';
+    } else {
+      badgeClass = 'bg-blue-50/70 text-blue-700 border-blue-200/50';
+      text = isHe ? 'תקין (בזמן)' : 'On Track';
+      dotClass = 'bg-blue-500';
+    }
+
+    return (
+      <div className="inline-flex flex-col items-center gap-0.5 group/delay relative cursor-help">
+        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ${badgeClass}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+          <span>{text}</span>
+          {riskCategory !== 'cancelled' && riskCategory !== 'delivered' && (
+            <span className="font-mono text-[9px] opacity-80">({riskScore}%)</span>
+          )}
+        </span>
+        <span className="text-[10px] text-slate-400 max-w-[125px] truncate font-medium block">
+          {reason}
+        </span>
+
+        {/* Dynamic micro-tooltip overlay on hover */}
+        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-900 text-white rounded-xl p-3 shadow-xl opacity-0 group-hover/delay:opacity-100 pointer-events-none transition-opacity duration-200 z-50 text-left text-[11px] w-56 space-y-1.5 border border-slate-800">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-1 font-bold">
+            <span className="text-blue-400">{isHe ? 'ניתוח עמידה ב-SLA' : 'SLA Analytics'}</span>
+            <span className="font-mono">{riskScore}%</span>
+          </div>
+          {riskCategory !== 'cancelled' && riskCategory !== 'delivered' ? (
+            <>
+              <div className="flex justify-between">
+                <span className="text-slate-400">{isHe ? 'זמן טיפול צפוי:' : 'Expected Std:'}</span>
+                <span className="font-mono text-white font-bold">{data.standardProcessingTime}h</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">{isHe ? 'זמן מהקליטה:' : 'Elapsed Time:'}</span>
+                <span className="font-mono text-white font-bold">{data.elapsedHours}h</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">{isHe ? 'חלון SLA מוגדר:' : 'SLA Window:'}</span>
+                <span className="font-mono text-white font-bold">{data.slaWindow}h</span>
+              </div>
+            </>
+          ) : null}
+          <div className="text-[10px] text-slate-400 border-t border-slate-800/60 pt-1 leading-normal font-medium">
+            <span className="font-bold text-slate-300">{isHe ? 'גורמי השפעה:' : 'Factors:'}</span> {reason}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render Status Badge
+  const renderStatusBadge = (status: OrderStatus) => {
+    const config = {
+      pending: {
+        bg: 'bg-amber-50 text-amber-700 border-amber-200',
+        textHe: 'ממתין',
+        textEn: 'Pending',
+      },
+      processing: {
+        bg: 'bg-blue-50 text-blue-700 border-blue-200',
+        textHe: 'בטיפול',
+        textEn: 'Processing',
+      },
+      delivered: {
+        bg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        textHe: 'נמסר',
+        textEn: 'Delivered',
+      },
+      cancelled: {
+        bg: 'bg-slate-50 text-slate-500 border-slate-200',
+        textHe: 'בוטל',
+        textEn: 'Cancelled',
+      },
+    }[status];
+
+    return (
+      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ${config.bg}`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
+        {isHe ? config.textHe : config.textEn}
+      </span>
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      
+      {/* Advanced Floating Search and Filters Panel */}
+      <div className="rounded-2xl border border-slate-200/60 bg-white/95 backdrop-blur-md p-6 shadow-md shadow-slate-100/80 hover:shadow-lg transition-all space-y-5 relative z-20">
+        
+        {/* Row 1: Header, Search and Reset */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-blue-50 text-blue-600 p-2 rounded-xl border border-blue-100">
+              <Filter className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">
+                {isHe ? 'סרגל סינון ואיתור מתקדם' : 'Advanced Dispatch Filters'}
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {isHe ? 'סינון ואיתור נתונים בזמן אמת לפי יעדים, מלאי ותאריכים' : 'Filter and query live dispatches by location, SKU, and date'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Results count badge */}
+            <div className="flex items-center gap-1.5 text-xs font-bold bg-slate-50 border border-slate-100 rounded-lg px-3 py-1.5 text-slate-500">
+              <span>{isHe ? 'הזמנות שנמצאו:' : 'Matches:'}</span>
+              <span className="font-mono text-blue-600 bg-blue-50/50 rounded px-1.5 py-0.5 text-xs">{filteredOrders.length}</span>
+              <span className="text-slate-300">/</span>
+              <span className="font-mono text-slate-600">{orders.length}</span>
+            </div>
+
+            {/* Clear Filters Button */}
+            {(searchTerm || selectedWarehouse !== 'all' || selectedStatus !== 'all' || startDate || endDate || selectedSku !== 'all') && (
+              <button
+                id="dispatch-reset-filters-btn"
+                onClick={resetFilters}
+                className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-100 transition-all cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>{isHe ? 'איפוס מסננים' : 'Clear Filters'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Row 2: Grid of Inputs */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+          
+          {/* 1. Global Search input */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+              <Search className="h-3 w-3" />
+              {isHe ? 'חיפוש חופשי' : 'Free Search'}
+            </label>
+            <div className="relative">
+              <Search className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 ${isHe ? 'right-3' : 'left-3'}`} />
+              <input
+                id="dispatch-search-input"
+                type="text"
+                placeholder={isHe ? 'מספר הזמנה, שם לקוח, כתובת...' : 'Order #, customer, address...'}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className={`w-full rounded-xl border border-slate-200 bg-slate-50/40 py-2 text-xs outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-50/50 ${
+                  isHe ? 'pl-4 pr-9 text-right' : 'pl-9 pr-4 text-left'
+                }`}
+              />
+            </div>
+          </div>
+
+          {/* 2. Warehouse Picker */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+              <Building2 className="h-3 w-3" />
+              {isHe ? 'מחסן הפצה' : 'Warehouse Hub'}
+            </label>
+            <select
+              id="filter-warehouse-select"
+              value={selectedWarehouse}
+              onChange={(e) => setSelectedWarehouse(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/40 py-2 px-3 text-xs font-semibold text-slate-700 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-50/50"
+            >
+              <option value="all">{isHe ? 'כל המחסנים (הכל)' : 'All Warehouses'}</option>
+              {/* Ensure "מחסן התלמיד" and "מחסן החרש" are prominent if they exist in standard list */}
+              {uniqueWarehouses.filter(w => w !== 'all').map(wh => (
+                <option key={wh} value={wh}>
+                  {translate(wh, lang)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Specific SKU/Product Search Lookup */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+              <Package className="h-3 w-3" />
+              {isHe ? 'איתור לפי מק"ט / פריט' : 'Filter by SKU / Item'}
+            </label>
+            <select
+              id="filter-sku-select"
+              value={selectedSku}
+              onChange={(e) => setSelectedSku(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50/40 py-2 px-3 text-xs font-semibold text-slate-700 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-50/50"
+            >
+              <option value="all">{isHe ? 'כל המק"טים (הכל)' : 'All Products / SKUs'}</option>
+              {uniqueSkus.map(item => (
+                <option key={item.sku} value={item.sku}>
+                  {item.sku} - {translate(item.name, lang)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4. Date Range Picking */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+              <Calendar className="h-3 w-3" />
+              {isHe ? 'תאריכי קליטה' : 'Entry Date Range'}
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                id="filter-start-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/40 py-1.5 px-2 text-[11px] outline-none font-medium transition-all focus:border-blue-500 focus:bg-white"
+                title={isHe ? 'תאריך התחלה' : 'Start Date'}
+              />
+              <span className="text-slate-300 text-xs">-</span>
+              <input
+                id="filter-end-date"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/40 py-1.5 px-2 text-[11px] outline-none font-medium transition-all focus:border-blue-500 focus:bg-white"
+                title={isHe ? 'תאריך סיום' : 'End Date'}
+              />
+            </div>
+          </div>
+
+        </div>
+
+        {/* Row 3: Quick Date Presets and Status segments */}
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pt-3 border-t border-slate-100">
+          
+          {/* Quick Date Presets */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
+              {isHe ? 'טווחים מהירים:' : 'Quick Presets:'}
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {[
+                { id: 'all', he: 'הכל', en: 'All' },
+                { id: 'today', he: 'היום', en: 'Today' },
+                { id: '7days', he: '7 ימים', en: '7 Days' },
+                { id: '30days', he: '30 ימים', en: '30 Days' },
+              ].map((p) => {
+                // Determine active preset
+                let isActive = false;
+                const todayStr = new Date().toISOString().split('T')[0];
+                if (p.id === 'all' && !startDate && !endDate) isActive = true;
+                if (p.id === 'today' && startDate === todayStr && endDate === todayStr) isActive = true;
+                if (p.id === '7days') {
+                  const past = new Date();
+                  past.setDate(past.getDate() - 7);
+                  if (startDate === past.toISOString().split('T')[0] && endDate === todayStr) isActive = true;
+                }
+                if (p.id === '30days') {
+                  const past = new Date();
+                  past.setDate(past.getDate() - 30);
+                  if (startDate === past.toISOString().split('T')[0] && endDate === todayStr) isActive = true;
+                }
+
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleDatePreset(p.id as any)}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-bold border transition-all ${
+                      isActive
+                        ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-sm'
+                        : 'bg-white text-slate-500 border-slate-200 hover:text-slate-800'
+                    }`}
+                  >
+                    {isHe ? p.he : p.en}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Status Segment Switcher */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
+              {isHe ? 'סינון לפי סטטוס:' : 'Status Filter:'}
+            </span>
+            <div className="flex gap-0.5 bg-slate-100 p-1 rounded-xl border border-slate-200/40">
+              {['all', 'pending', 'processing', 'delivered', 'cancelled'].map((status) => {
+                const label = {
+                  all: isHe ? 'הכל' : 'All',
+                  pending: isHe ? 'ממתין' : 'Pending',
+                  processing: isHe ? 'בטיפול' : 'In Progress',
+                  delivered: isHe ? 'נמסר' : 'Delivered',
+                  cancelled: isHe ? 'בוטל' : 'Cancelled',
+                }[status];
+                
+                const isActive = selectedStatus === status;
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    id={`filter-status-${status}-btn`}
+                    onClick={() => setSelectedStatus(status)}
+                    className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition-all ${
+                      isActive 
+                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/10 font-black' 
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Main Table Card */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+        
+        {isLoading ? (
+          <div className="overflow-x-auto animate-pulse">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  <th className="py-3.5 px-4 w-10"></th>
+                  <th className="py-3.5 px-4">{isHe ? 'מספר הזמנה' : 'Order #'}</th>
+                  <th className="py-3.5 px-4">{isHe ? 'תאריך ושעה' : 'Timestamp'}</th>
+                  <th className="py-3.5 px-4">{isHe ? 'לקוח קצה' : 'Customer Name'}</th>
+                  <th className="py-3.5 px-4">{isHe ? 'מחסן' : 'Warehouse'}</th>
+                  <th className="py-3.5 px-4">{isHe ? 'סה"כ סכום' : 'Total Amount'}</th>
+                  <th className="py-3.5 px-4">{isHe ? 'סטטוס' : 'Fulfillment Status'}</th>
+                  <th className="py-3.5 px-4 w-12"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {[1, 2, 3, 4, 5].map((idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/30">
+                    <td className="py-4 px-4">
+                      <div className="h-4 w-4 rounded bg-slate-200" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-4 w-20 rounded bg-slate-200" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-4 w-24 rounded bg-slate-100" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="space-y-1.5">
+                        <div className="h-4 w-32 rounded bg-slate-200" />
+                        <div className="h-3 w-40 rounded bg-slate-100" />
+                      </div>
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-5 w-24 rounded bg-slate-100" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-4 w-16 rounded bg-slate-200" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-6 w-16 rounded bg-slate-100" />
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="h-8 w-8 rounded bg-slate-100" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : filteredOrders.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+            <div className="rounded-full bg-slate-50 p-4 border border-slate-100 mb-3">
+              <AlertCircle className="h-6 w-6 text-slate-400" />
+            </div>
+            <h4 className="text-sm font-bold text-slate-700">
+              {isHe ? 'לא נמצאו הזמנות תואמות' : 'No matching dispatches found'}
+            </h4>
+            <p className="text-xs text-slate-400 mt-1 max-w-md">
+              {isHe 
+                ? 'נסה לשנות את ביטוי החיפוש או לאפס את המסננים שהגדרת' 
+                : 'Try adjusting your filters, searching other metrics, or generating a mock order.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  <th className="py-3 px-4 w-10"></th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('orderNumber')}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>{isHe ? 'מספר הזמנה' : 'Order #'}</span>
+                      <ArrowUpDown className="h-3 w-3" />
+                    </div>
+                  </th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('timestamp')}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>{isHe ? 'תאריך ושעה' : 'Timestamp'}</span>
+                      <ArrowUpDown className="h-3 w-3" />
+                    </div>
+                  </th>
+                  <th 
+                    className="py-3 px-4 cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('customerName')}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>{isHe ? 'שם לקוח' : 'Customer Name'}</span>
+                      <ArrowUpDown className="h-3 w-3" />
+                    </div>
+                  </th>
+                  <th className="py-3 px-4">{isHe ? 'מחסן הפצה' : 'Warehouse'}</th>
+                  <th className="py-3 px-4">{isHe ? 'כתובת אספקה' : 'Delivery Address'}</th>
+                  <th 
+                    className="py-3 px-4 text-right cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('totalAmount')}
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      <span>{isHe ? 'סה"כ' : 'Total'}</span>
+                      <ArrowUpDown className="h-3 w-3" />
+                    </div>
+                  </th>
+                  <th 
+                    className="py-3 px-4 text-center cursor-pointer hover:text-slate-900 transition-colors"
+                    onClick={() => handleSort('predictedDelay')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      <span>{isHe ? 'צפי עיכוב / סיכון SLA' : 'SLA Breach Risk'}</span>
+                      <ArrowUpDown className="h-3 w-3" />
+                    </div>
+                  </th>
+                  <th className="py-3 px-4 text-center">{isHe ? 'סטטוס' : 'Status'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {filteredOrders.map((order) => {
+                  const isExpanded = !!expandedOrders[order.id];
+                  
+                  return (
+                    <React.Fragment key={order.id}>
+                      {/* Main Row */}
+                      <tr 
+                        id={`order-row-${order.orderNumber}`}
+                        onClick={() => toggleRow(order.id)}
+                        className={`group cursor-pointer transition-colors hover:bg-slate-50/80 ${
+                          isExpanded ? 'bg-blue-50/10' : ''
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 text-center">
+                          {isExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-slate-400 group-hover:text-slate-700" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-slate-400 group-hover:text-slate-700" />
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 font-mono font-bold text-slate-800">
+                          {order.orderNumber}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 whitespace-nowrap">
+                          {formatDate(order.timestamp, lang)}
+                        </td>
+                        <td className="py-3.5 px-4 font-semibold text-slate-800">
+                          {translate(order.customerName, lang)}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-600 font-medium">
+                          <span className="inline-flex items-center gap-1">
+                            <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                            {translate(order.warehouse, lang)}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-500 max-w-xs truncate" title={translate(order.deliveryAddress, lang)}>
+                          <span className="inline-flex items-center gap-1">
+                            <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                            {translate(order.deliveryAddress, lang)}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-bold text-slate-900">
+                          ₪{order.totalAmount.toLocaleString()}
+                        </td>
+                        <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          {renderDelayFlag(order.id)}
+                        </td>
+                        <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          {renderStatusBadge(order.status)}
+                        </td>
+                      </tr>
+
+                      {/* Expandable Details Row */}
+                      {isExpanded && (
+                        <tr className="bg-slate-50/40">
+                          <td colSpan={9} className="py-4 px-6 border-b border-slate-100">
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                              
+                              {/* Left Columns: Items Sub-table */}
+                              <div className="lg:col-span-2 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                                    <Package className="h-3.5 w-3.5" />
+                                    {isHe ? 'פירוט פריטים במשלוח' : 'Item Shipment Manifest'}
+                                  </h5>
+                                  <span className="text-xs font-semibold text-slate-500">
+                                    {order.items.length} {isHe ? 'מוצרים שונים' : 'unique SKUs'}
+                                  </span>
+                                </div>
+                                
+                                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                                  <table className="w-full text-left text-xs">
+                                    <thead>
+                                      <tr className="border-b border-slate-100 bg-slate-50 font-bold text-slate-400 uppercase tracking-wider">
+                                        <th className="py-2 px-3">{isHe ? 'מק"ט' : 'SKU'}</th>
+                                        <th className="py-2 px-3">{isHe ? 'תיאור פריט' : 'Product Description'}</th>
+                                        <th className="py-2 px-3 text-right">{isHe ? 'מחיר יחידה' : 'Unit Price'}</th>
+                                        <th className="py-2 px-3 text-center">{isHe ? 'כמות' : 'Qty'}</th>
+                                        <th className="py-2 px-3 text-right">{isHe ? 'סה"כ לתשלום' : 'Subtotal'}</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                                      {order.items.map((item) => (
+                                        <tr key={item.id} className="hover:bg-slate-50/50">
+                                          <td className="py-2 px-3 font-mono font-semibold text-slate-500">{item.sku}</td>
+                                          <td className="py-2 px-3 font-semibold text-slate-800">{translate(item.name, lang)}</td>
+                                          <td className="py-2 px-3 text-right">₪{item.price}</td>
+                                          <td className="py-2 px-3 text-center font-bold text-slate-900 bg-slate-50/30">{item.quantity}</td>
+                                          <td className="py-2 px-3 text-right font-semibold text-slate-900">₪{(item.price * item.quantity).toLocaleString()}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+
+                              {/* Right Column: Order Details & Actions */}
+                              <div className="space-y-4">
+                                <div className="space-y-2">
+                                  <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                                    {isHe ? 'פרטי שילוח והערות' : 'Dispatch Info & Comments'}
+                                  </h5>
+                                  <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5 text-xs text-slate-600">
+                                    <div className="flex items-start gap-1.5">
+                                      <User className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
+                                      <div>
+                                        <span className="font-bold text-slate-800">{isHe ? 'לקוח: ' : 'Customer: '}</span>
+                                        {translate(order.customerName, lang)}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-start gap-1.5">
+                                      <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
+                                      <div>
+                                        <span className="font-bold text-slate-800">{isHe ? 'זמן יצירה: ' : 'Created: '}</span>
+                                        {formatDate(order.timestamp, lang)}
+                                      </div>
+                                    </div>
+                                    {order.notes && (
+                                      <div className="mt-2 bg-amber-50/70 border border-amber-100 rounded-lg p-2.5 text-amber-900">
+                                        <span className="font-bold block mb-0.5">{isHe ? 'הערות מיוחדות לסידור:' : 'Dispatch Note:'}</span>
+                                        {order.notes}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Dynamic Fulfillment Delay Analyzer inside expandable section */}
+                                  {order.status !== 'cancelled' && order.status !== 'delivered' && (
+                                    <div className="space-y-2 mt-3">
+                                      <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                                        <Activity className="h-3.5 w-3.5 text-blue-500" />
+                                        {isHe ? 'מנתח עיכובי שרשרת אספקה' : 'Supply Chain Bottleneck Analyzer'}
+                                      </h5>
+                                      <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3 text-xs">
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-bold text-slate-700">{isHe ? 'רמת סיכון חריגה:' : 'SLA Breach Probability:'}</span>
+                                          <span className={`font-mono font-black rounded px-1.5 py-0.5 text-[11px] ${
+                                            orderDelayMetrics[order.id]?.riskCategory === 'breached' 
+                                              ? 'bg-rose-100 text-rose-800' 
+                                              : orderDelayMetrics[order.id]?.riskCategory === 'high'
+                                              ? 'bg-orange-100 text-orange-800'
+                                              : orderDelayMetrics[order.id]?.riskCategory === 'medium'
+                                              ? 'bg-amber-100 text-amber-800'
+                                              : 'bg-blue-100 text-blue-800'
+                                          }`}>
+                                            {orderDelayMetrics[order.id]?.riskScore}%
+                                          </span>
+                                        </div>
+
+                                        {/* Progress bar of SLA elapsed */}
+                                        <div className="space-y-1">
+                                          <div className="flex justify-between text-[10px] text-slate-500 font-semibold">
+                                            <span>{isHe ? 'חלף מהקליטה:' : 'Elapsed:'} {orderDelayMetrics[order.id]?.elapsedHours}h</span>
+                                            <span>SLA: {orderDelayMetrics[order.id]?.slaWindow}h</span>
+                                          </div>
+                                          <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                                            <div 
+                                              style={{ width: `${Math.min(100, orderDelayMetrics[order.id]?.riskScore || 0)}%` }}
+                                              className={`h-full rounded-full transition-all duration-500 ${
+                                                orderDelayMetrics[order.id]?.riskCategory === 'breached' 
+                                                  ? 'bg-rose-500' 
+                                                  : orderDelayMetrics[order.id]?.riskCategory === 'high'
+                                                  ? 'bg-orange-500'
+                                                  : orderDelayMetrics[order.id]?.riskCategory === 'medium'
+                                                  ? 'bg-amber-500'
+                                                  : 'bg-blue-500'
+                                              }`}
+                                            />
+                                          </div>
+                                        </div>
+
+                                        {/* Detailed factor values */}
+                                        <div className="grid grid-cols-2 gap-2 text-[10px] bg-white p-2.5 rounded-lg border border-slate-150 text-slate-600">
+                                          <div>
+                                            <span className="text-slate-400 block">{isHe ? 'קצב עיבוד מחסן:' : 'Warehouse Rate:'}</span>
+                                            <span className="font-bold text-slate-700 font-mono">
+                                              {order.warehouse.includes('התלמיד') ? '3.5h (כבד)' : '2.0h (מהיר)'}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 block">{isHe ? 'זמן טיפול תקני צפוי:' : 'Expected Handling:'}</span>
+                                            <span className="font-bold text-slate-700 font-mono">{orderDelayMetrics[order.id]?.standardProcessingTime}h</span>
+                                          </div>
+                                          <div className="col-span-2 pt-1 border-t border-slate-100">
+                                            <span className="text-slate-400 block">{isHe ? 'גורם עיכוב ראשי:' : 'Primary Bottleneck Factor:'}</span>
+                                            <span className="font-bold text-slate-800">
+                                              {isHe ? orderDelayMetrics[order.id]?.reasonHe : orderDelayMetrics[order.id]?.reasonEn}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Status transition dispatch actions */}
+                                <div className="space-y-2">
+                                  <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                                    {isHe ? 'עדכון סטטוס הפצה' : 'Update Dispatch Status'}
+                                  </h5>
+                                  <div className="grid grid-cols-2 gap-1.5">
+                                    <button
+                                      id={`dispatch-status-pending-${order.id}`}
+                                      onClick={() => onUpdateStatus(order.id, 'pending')}
+                                      className={`rounded-lg py-1.5 px-2.5 text-xs font-semibold border transition-all text-center ${
+                                        order.status === 'pending'
+                                          ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      {isHe ? 'העבר לממתין' : 'Set Pending'}
+                                    </button>
+                                    <button
+                                      id={`dispatch-status-processing-${order.id}`}
+                                      onClick={() => onUpdateStatus(order.id, 'processing')}
+                                      className={`rounded-lg py-1.5 px-2.5 text-xs font-semibold border transition-all text-center ${
+                                        order.status === 'processing'
+                                          ? 'bg-blue-100 text-blue-800 border-blue-300'
+                                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      {isHe ? 'התחל טיפול' : 'Start Process'}
+                                    </button>
+                                    <button
+                                      id={`dispatch-status-delivered-${order.id}`}
+                                      onClick={() => onUpdateStatus(order.id, 'delivered')}
+                                      className={`rounded-lg py-1.5 px-2.5 text-xs font-semibold border transition-all text-center col-span-2 ${
+                                        order.status === 'delivered'
+                                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      {isHe ? 'סמן כנמסר (הושלם)' : 'Mark as Delivered'}
+                                    </button>
+                                    <button
+                                      id={`dispatch-status-cancelled-${order.id}`}
+                                      onClick={() => onUpdateStatus(order.id, 'cancelled')}
+                                      className={`rounded-lg py-1.5 px-2.5 text-xs font-semibold border transition-all text-center ${
+                                        order.status === 'cancelled'
+                                          ? 'bg-slate-200 text-slate-800 border-slate-300'
+                                          : 'bg-white text-rose-600 border-rose-100 hover:bg-rose-50/50'
+                                      }`}
+                                    >
+                                      {isHe ? 'בטל משלוח' : 'Cancel Order'}
+                                    </button>
+                                    
+                                    {onDeleteOrder && (
+                                      <button
+                                        id={`dispatch-delete-${order.id}`}
+                                        onClick={() => onDeleteOrder(order.id)}
+                                        className="rounded-lg py-1.5 px-2.5 text-xs font-semibold border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-all text-center flex items-center justify-center gap-1"
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                        <span>{isHe ? 'מחק לחלוטין' : 'Delete Log'}</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                              </div>
+
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
