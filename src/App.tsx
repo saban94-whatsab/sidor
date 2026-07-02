@@ -8,8 +8,6 @@ import {
   createRandomOrder, 
   fetchLiveOrders,
   updateLiveOrderStatus,
-  getStoredAuditLogs,
-  saveStoredAuditLogs
 } from './utils/api';
 import { 
   getOrdersFromFirestore, 
