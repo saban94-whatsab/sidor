@@ -18,7 +18,9 @@ import {
   deleteOrderFromFirestore,
   getAuditLogsFromFirestore, 
   saveAuditLogToFirestore, 
-  syncAuditLogsToFirestore 
+  syncAuditLogsToFirestore,
+  subscribeToOrders,
+  subscribeToAuditLogs
 } from './utils/firebase';
 import { Order, AppConfig, Language, OrderStatus, AuditLogEntry } from './types';
 import MetricCard from './components/MetricCard';
@@ -51,8 +53,12 @@ import {
   Sparkles,
   History,
   Moon,
-  Sun
+  Sun,
+  Menu,
+  X
 } from 'lucide-react';
+
+import { motion, AnimatePresence } from 'motion/react';
 
 import NoaChat from './components/NoaChat';
 import MorningReport from './components/MorningReport';
@@ -62,6 +68,7 @@ const OrderMap = React.lazy(() => import('./components/OrderMap'));
 export default function App() {
   // Config & State
   const [config, setConfig] = useState<AppConfig>(getStoredConfig);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [lang, setLang] = useState<Language>('he');
   const [currentTab, setCurrentTab] = useState<'dispatch' | 'analytics' | 'map' | 'noa-ai' | 'morning-report' | 'order-history'>('dispatch');
   const [selectedOrderNumber, setSelectedOrderNumber] = useState<string | null>(null);
@@ -89,49 +96,75 @@ export default function App() {
 
   const isHe = lang === 'he';
 
-  // Load orders on startup
+  // Real-time synchronization of orders and audit logs
   useEffect(() => {
-    loadInitialData();
-  }, [config.webappUrl]);
-
-  const loadInitialData = async () => {
     setIsLoading(true);
     setSyncError(null);
-    
-    const targetUrl = config.webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
-    
-    try {
-      console.log('Attempting to fetch orders from Firestore...');
-      let firestoreOrders = await getOrdersFromFirestore();
-      let firestoreLogs = await getAuditLogsFromFirestore();
-      
-      if (firestoreOrders.length === 0) {
-        console.log('Firestore is empty. Fetching initial data from WebApp to populate Firestore...');
-        const liveData = await fetchLiveOrders(targetUrl);
-        firestoreOrders = liveData;
-        await syncOrdersToFirestore(liveData);
-        
-        const initialLogs = getStoredAuditLogs(liveData);
-        firestoreLogs = initialLogs;
-        await syncAuditLogsToFirestore(initialLogs);
+
+    console.log('Subscribing to real-time updates from Firestore...');
+
+    let isInitialSeeding = false;
+
+    // 1. Subscribe to orders
+    const unsubscribeOrders = subscribeToOrders(
+      async (liveOrders) => {
+        if (liveOrders.length === 0 && !isInitialSeeding) {
+          isInitialSeeding = true;
+          console.log('Firestore is empty. Fetching initial data from WebApp to populate Firestore...');
+          const targetUrl = config.webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+          try {
+            const liveData = await fetchLiveOrders(targetUrl);
+            await syncOrdersToFirestore(liveData);
+            
+            const initialLogs = getStoredAuditLogs(liveData);
+            await syncAuditLogsToFirestore(initialLogs);
+          } catch (sheetErr) {
+            console.error('Failed to seed Firestore from WebApp:', sheetErr);
+            // Fallback to local storage if even sheet fetch fails
+            const loadedOrders = getStoredOrders();
+            setOrders(loadedOrders);
+            setIsLoading(false);
+          }
+        } else {
+          setOrders(liveOrders);
+          saveStoredOrders(liveOrders);
+          setIsLoading(false);
+        }
+      },
+      (err) => {
+        console.error('Real-time sync error for orders:', err);
+        setSyncError(isHe 
+          ? 'סנכרון בזמן אמת נכשל. מציג נתונים שמורים מקומיים.' 
+          : 'Real-time sync failed. Showing local saved state.'
+        );
+        const loadedOrders = getStoredOrders();
+        setOrders(loadedOrders);
+        setIsLoading(false);
       }
-      
-      setOrders(firestoreOrders);
-      saveStoredOrders(firestoreOrders);
-      setAuditLogs(firestoreLogs);
-      saveStoredAuditLogs(firestoreLogs);
-    } catch (err: any) {
-      console.error('Failed Firestore or live sync, loading local storage fallback data', err);
-      setSyncError(isHe 
-        ? 'חיבור למאגר Firestore נכשל. מציג נתונים שמורים מסנכרון אחרון.' 
-        : 'Firestore database connection failed. Showing last saved state.'
-      );
-      const loadedOrders = getStoredOrders();
-      setOrders(loadedOrders);
-      setAuditLogs(getStoredAuditLogs(loadedOrders));
-    }
-    setIsLoading(false);
-  };
+    );
+
+    // 2. Subscribe to audit logs
+    const unsubscribeLogs = subscribeToAuditLogs(
+      (liveLogs) => {
+        if (liveLogs.length > 0) {
+          setAuditLogs(liveLogs);
+          saveStoredAuditLogs(liveLogs);
+        }
+      },
+      (err) => {
+        console.error('Real-time sync error for audit logs:', err);
+        const loadedLogs = getStoredAuditLogs(getStoredOrders());
+        setAuditLogs(loadedLogs);
+      }
+    );
+
+    // Clean up subscriptions on unmount
+    return () => {
+      console.log('Unsubscribing from real-time Firestore updates...');
+      unsubscribeOrders();
+      unsubscribeLogs();
+    };
+  }, [config.webappUrl, isHe]);
 
   // Global keyboard shortcuts for tab navigation
   useEffect(() => {
@@ -393,6 +426,207 @@ export default function App() {
           : 'bg-slate-50/80 text-slate-900'
       }`}
     >
+      {/* Mobile Drawer Slide-out Layered Menu (Hamburger) */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            {/* Backdrop Overlay */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.5 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="fixed inset-0 bg-slate-950 z-50 md:hidden"
+            />
+            
+            {/* Drawer Content */}
+            <motion.aside
+              initial={{ x: isHe ? '100%' : '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: isHe ? '100%' : '-100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className={`fixed top-0 bottom-0 ${
+                isHe ? 'right-0' : 'left-0'
+              } w-72 bg-slate-900 text-slate-300 flex flex-col z-50 shadow-2xl border-l border-slate-800 md:hidden`}
+            >
+              {/* Header */}
+              <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 shadow-md shadow-blue-500/20">
+                    <span className="font-mono text-base font-bold text-white">S</span>
+                  </div>
+                  <div>
+                    <h2 className="font-sans text-base font-extrabold tracking-tight text-white leading-none">
+                      Saban<span className="text-blue-500">OS</span>
+                    </h2>
+                    <p className="text-[9px] font-medium text-slate-500 mt-0.5 uppercase tracking-wider">
+                      {isHe ? 'לוגיסטיקה ושרשרת אספקה' : 'Logistics Control'}
+                    </p>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="h-8 w-8 flex items-center justify-center rounded-lg border border-slate-800 bg-slate-950/40 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                  title={isHe ? 'סגור תפריט' : 'Close Menu'}
+                >
+                  <X className="h-4.5 w-4.5" />
+                </button>
+              </div>
+
+              {/* Navigation Links */}
+              <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+                <button
+                  onClick={() => {
+                    setCurrentTab('dispatch');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'dispatch'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <LayoutDashboard className="h-4.5 w-4.5 shrink-0" />
+                  <span>{isHe ? 'לוח סידור ראשי' : 'Dispatch Control'}</span>
+                </button>
+                
+                <button
+                  onClick={() => {
+                    setCurrentTab('analytics');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'analytics'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <BarChart3 className="h-4.5 w-4.5 shrink-0" />
+                  <span>{isHe ? 'דוחות וניתוח מוצרים' : 'Product Analytics'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setCurrentTab('map');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'map'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Map className="h-4.5 w-4.5 shrink-0" />
+                  <span>{isHe ? 'מפת סידור הפצה' : 'Logistics Map'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setCurrentTab('noa-ai');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'noa-ai'
+                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <MessageSquare className="h-4.5 w-4.5 shrink-0" />
+                    <span>{isHe ? 'נועה Noa AI (צ׳אט)' : 'Noa AI Assistant'}</span>
+                  </div>
+                  <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setCurrentTab('morning-report');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'morning-report'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Sparkles className="h-4.5 w-4.5 shrink-0 text-amber-400" />
+                  <span>{isHe ? 'דוח בוקר לוגיסטי' : 'Logistics Briefing'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setCurrentTab('order-history');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all ${
+                    currentTab === 'order-history'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/10'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  }`}
+                >
+                  <History className="h-4.5 w-4.5 shrink-0" />
+                  <span>{isHe ? 'היסטוריית סטטוסים' : 'Order History'}</span>
+                </button>
+              </nav>
+
+              {/* Extra settings controls on mobile drawer for ultimate convenience */}
+              <div className="p-3 bg-slate-950/20 border-t border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+                  <span>{isHe ? 'הגדרות מהירות:' : 'Quick Controls:'}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={() => setLang(isHe ? 'en' : 'he')}
+                    className="flex flex-col items-center justify-center p-2 rounded-xl border border-slate-800 bg-slate-950/40 hover:bg-slate-800 hover:text-white transition-all text-[11px] font-bold cursor-pointer"
+                  >
+                    <Globe className="h-4 w-4 mb-1 text-slate-400" />
+                    <span>{isHe ? 'English' : 'עברית'}</span>
+                  </button>
+                  <button
+                    onClick={() => setDarkMode(!darkMode)}
+                    className="flex flex-col items-center justify-center p-2 rounded-xl border border-slate-800 bg-slate-950/40 hover:bg-slate-800 hover:text-white transition-all text-[11px] font-bold cursor-pointer"
+                  >
+                    {darkMode ? (
+                      <Sun className="h-4 w-4 mb-1 text-amber-500" />
+                    ) : (
+                      <Moon className="h-4 w-4 mb-1 text-slate-400" />
+                    )}
+                    <span>{darkMode ? (isHe ? 'יום' : 'Light') : (isHe ? 'לילה' : 'Dark')}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsSettingsOpen(true);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="flex flex-col items-center justify-center p-2 rounded-xl border border-slate-800 bg-slate-950/40 hover:bg-slate-800 hover:text-white transition-all text-[11px] font-bold cursor-pointer"
+                  >
+                    <Settings className="h-4 w-4 mb-1 text-slate-400" />
+                    <span>{isHe ? 'הגדרות' : 'Config'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Shift Manager Block (Footer) */}
+              <div className="p-4 border-t border-slate-800 bg-slate-950/40">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+                    <User className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-white">{isHe ? ' ראמי מסארוה' : 'Avi Cohen'}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      <p className="text-[10px] font-medium text-slate-500">{isHe ? 'מנהל תורן פעיל' : 'Active Shift Manager'}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* 1. Elegant Dashboard Sidebar (Desktop Only) */}
       <aside className="w-64 bg-slate-900 flex flex-col text-slate-300 shrink-0 hidden md:flex">
         {/* Brand Header */}
@@ -515,15 +749,24 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         
         {/* Top Header Row */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 lg:px-8 shrink-0">
+        <header className="h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between px-6 lg:px-8 shrink-0">
           <div className="flex items-center gap-3">
-            {/* Left brand indicator for mobile */}
-            <div className="flex md:hidden h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-              <span className="font-mono text-base font-bold text-white">S</span>
+            {/* Hamburger menu & left brand indicator for mobile */}
+            <div className="flex md:hidden items-center gap-2">
+              <button
+                onClick={() => setIsMobileMenuOpen(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200/80 bg-white dark:bg-slate-800 dark:border-slate-700/80 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer shadow-xs"
+                title={isHe ? 'תפריט ניווט' : 'Navigation Menu'}
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
+                <span className="font-mono text-base font-bold text-white">S</span>
+              </div>
             </div>
             
             {/* Status Badge */}
-            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50">
               <span className="flex items-center gap-1.5">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>

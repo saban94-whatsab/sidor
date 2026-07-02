@@ -8,7 +8,8 @@ import {
   query, 
   orderBy, 
   writeBatch,
-  deleteDoc
+  deleteDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { Order, AuditLogEntry } from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -143,4 +144,44 @@ export async function syncAuditLogsToFirestore(logs: AuditLogEntry[]): Promise<v
     console.error('Error syncing audit logs to Firestore:', error);
     throw error;
   }
+}
+
+/**
+ * Subscribe to real-time changes of orders collection in Firestore
+ */
+export function subscribeToOrders(
+  onUpdate: (orders: Order[]) => void, 
+  onError: (err: Error) => void
+): () => void {
+  const ordersCol = collection(db, ORDERS_COLLECTION);
+  const q = query(ordersCol);
+  return onSnapshot(q, (snapshot) => {
+    const ordersList: Order[] = [];
+    snapshot.forEach((docSnap) => {
+      ordersList.push({ id: docSnap.id, ...docSnap.data() } as Order);
+    });
+    // Sort descending by timestamp
+    const sorted = ordersList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    onUpdate(sorted);
+  }, onError);
+}
+
+/**
+ * Subscribe to real-time changes of audit logs collection in Firestore
+ */
+export function subscribeToAuditLogs(
+  onUpdate: (logs: AuditLogEntry[]) => void, 
+  onError: (err: Error) => void
+): () => void {
+  const logsCol = collection(db, AUDIT_LOGS_COLLECTION);
+  const q = query(logsCol);
+  return onSnapshot(q, (snapshot) => {
+    const logsList: AuditLogEntry[] = [];
+    snapshot.forEach((docSnap) => {
+      logsList.push({ id: docSnap.id, ...docSnap.data() } as AuditLogEntry);
+    });
+    // Sort descending by timestamp
+    const sorted = logsList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    onUpdate(sorted);
+  }, onError);
 }

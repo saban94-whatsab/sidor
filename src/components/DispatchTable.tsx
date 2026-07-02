@@ -180,6 +180,13 @@ export default function DispatchTable({
   // Expanded rows track
   const [expandedOrders, setExpandedOrders] = useState<Record<string, boolean>>({});
 
+  // Selected orders track for bulk update
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  
+  // Hovered order state for detailed summary tooltip
+  const [hoveredOrderId, setHoveredOrderId] = useState<string | null>(null);
+  const [mouseCoords, setMouseCoords] = useState({ x: 0, y: 0 });
+
   // Compile list of unique SKUs for filters from products and orders
   const uniqueSkus = useMemo(() => {
     const map = new Map<string, string>();
@@ -865,39 +872,99 @@ export default function DispatchTable({
       {/* Main Table Card */}
       <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
         
-        {/* Real-time search input above the dispatch table */}
-        <div className="border-b border-slate-100 bg-slate-50/40 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              {isHe ? 'רשימת משלוחים וסטטוס קווים' : 'Active Dispatches & Route Status'}
-            </h4>
-          </div>
-          
-          <div className="relative w-full sm:w-80">
-            <Search className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 ${isHe ? 'right-3' : 'left-3'}`} />
-            <input
-              id="dispatch-table-quick-search"
-              type="text"
-              placeholder={isHe ? 'חפש לפי שם לקוח או מספר הזמנה...' : 'Search by name or order #...'}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className={`w-full rounded-xl border border-slate-200 bg-white py-1.5 text-xs outline-none font-medium transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-100/50 shadow-xs ${
-                isHe ? 'pl-8 pr-9 text-right' : 'pl-9 pr-8 text-left'
-              }`}
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className={`absolute top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer rounded-full hover:bg-slate-100 ${
-                  isHe ? 'left-2.5' : 'right-2.5'
-                }`}
-                title={isHe ? 'נקה חיפוש' : 'Clear search'}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
+        {/* Real-time search input above the dispatch table OR Bulk Action Bar if items selected */}
+        <div className="border-b border-slate-100 bg-slate-50/40 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-h-[56px]">
+          {selectedOrderIds.length > 0 ? (
+            <motion.div 
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex flex-wrap items-center justify-between w-full gap-3 bg-indigo-50/40 px-3 py-1.5 rounded-xl border border-indigo-100/50"
+            >
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                <span className="text-xs font-bold text-indigo-900">
+                  {isHe 
+                    ? `נבחרו ${selectedOrderIds.length} משלוחים` 
+                    : `${selectedOrderIds.length} orders selected`}
+                </span>
+                <button
+                  onClick={() => setSelectedOrderIds([])}
+                  className="text-xs text-indigo-500 hover:text-indigo-700 underline cursor-pointer"
+                >
+                  {isHe ? 'ביטול בחירה' : 'Clear selection'}
+                </button>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">
+                  {isHe ? 'עדכון סטטוס קבוצתי:' : 'Bulk status update:'}
+                </span>
+                <div className="flex gap-1.5">
+                  {(['pending', 'processing', 'delivered', 'cancelled'] as OrderStatus[]).map((st) => {
+                    let btnColor = 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200/50';
+                    if (st === 'pending') btnColor = 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200/50';
+                    if (st === 'processing') btnColor = 'bg-blue-50 hover:bg-blue-100 text-blue-800 border-blue-200/50';
+                    if (st === 'delivered') btnColor = 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200/50';
+                    if (st === 'cancelled') btnColor = 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200/50';
+                    
+                    const label = isHe 
+                      ? (st === 'pending' ? 'ממתין' : st === 'processing' ? 'בטיפול' : st === 'delivered' ? 'נמסר' : 'בוטל')
+                      : (st === 'pending' ? 'Pending' : st === 'processing' ? 'Processing' : st === 'delivered' ? 'Delivered' : 'Cancelled');
+                      
+                    return (
+                      <button
+                        key={st}
+                        onClick={() => {
+                          selectedOrderIds.forEach(id => {
+                            onUpdateStatus(id, st);
+                          });
+                          setSelectedOrderIds([]);
+                        }}
+                        className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all border ${btnColor} hover:scale-102 cursor-pointer shadow-xs`}
+                        id={`bulk-status-${st}`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  {isHe ? 'רשימת משלוחים וסטטוס קווים' : 'Active Dispatches & Route Status'}
+                </h4>
+              </div>
+              
+              <div className="relative w-full sm:w-80">
+                <Search className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 ${isHe ? 'right-3' : 'left-3'}`} />
+                <input
+                  id="dispatch-table-quick-search"
+                  type="text"
+                  placeholder={isHe ? 'חפש לפי שם לקוח או מספר הזמנה...' : 'Search by name or order #...'}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className={`w-full rounded-xl border border-slate-200 bg-white py-1.5 text-xs outline-none font-medium transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-100/50 shadow-xs ${
+                    isHe ? 'pl-8 pr-9 text-right' : 'pl-9 pr-8 text-left'
+                  }`}
+                />
+                {searchTerm && (
+                  <button
+                    onClick={() => setSearchTerm('')}
+                    className={`absolute top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer rounded-full hover:bg-slate-100 ${
+                      isHe ? 'left-2.5' : 'right-2.5'
+                    }`}
+                    title={isHe ? 'נקה חיפוש' : 'Clear search'}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
         
         {isLoading ? (
@@ -966,6 +1033,27 @@ export default function DispatchTable({
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   <th className="py-3 px-4 w-10"></th>
+                  <th className="py-3 px-2 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={filteredOrders.length > 0 && filteredOrders.every(o => selectedOrderIds.includes(o.id))}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedOrderIds(prev => {
+                            const newIds = [...prev];
+                            filteredOrders.forEach(o => {
+                              if (!newIds.includes(o.id)) newIds.push(o.id);
+                            });
+                            return newIds;
+                          });
+                        } else {
+                          setSelectedOrderIds(prev => prev.filter(id => !filteredOrders.some(o => o.id === id)));
+                        }
+                      }}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </th>
                   <th 
                     className="py-3 px-4 cursor-pointer hover:text-slate-900 transition-colors"
                     onClick={() => handleSort('orderNumber')}
@@ -1055,6 +1143,9 @@ export default function DispatchTable({
                       <motion.tr 
                         id={`order-row-${order.orderNumber}`}
                         onClick={() => toggleRow(order.id)}
+                        onMouseEnter={() => setHoveredOrderId(order.id)}
+                        onMouseMove={(e) => setMouseCoords({ x: e.clientX, y: e.clientY })}
+                        onMouseLeave={() => setHoveredOrderId(null)}
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ 
@@ -1076,6 +1167,20 @@ export default function DispatchTable({
                           ) : (
                             <ChevronDown className="h-4 w-4 text-slate-400 group-hover:text-slate-700" />
                           )}
+                        </td>
+                        <td className="py-3.5 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedOrderIds.includes(order.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedOrderIds(prev => [...prev, order.id]);
+                              } else {
+                                setSelectedOrderIds(prev => prev.filter(id => id !== order.id));
+                              }
+                            }}
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                          />
                         </td>
                         <td className="py-3.5 px-4 font-mono font-bold text-slate-800">
                           {order.orderNumber}
@@ -1109,7 +1214,7 @@ export default function DispatchTable({
                       {/* Expandable Details Row */}
                       {isExpanded && (
                         <tr className="bg-slate-50/40">
-                          <td colSpan={8} className="py-4 px-6 border-b border-slate-100">
+                          <td colSpan={9} className="py-4 px-6 border-b border-slate-100">
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                               
                               {/* Left Columns: Items Sub-table */}
@@ -1327,6 +1432,88 @@ export default function DispatchTable({
         )}
 
       </div>
+
+      {/* Hover Tooltip Overlay */}
+      {(() => {
+        if (!hoveredOrderId) return null;
+        const order = orders.find(o => o.id === hoveredOrderId);
+        if (!order) return null;
+        
+        const lastLog = auditLogs?.find(l => l.orderId === order.id);
+        const lastUpdatedTime = lastLog ? lastLog.timestamp : order.timestamp;
+        
+        return (
+          <div 
+            className="fixed z-50 pointer-events-none bg-slate-900/95 backdrop-blur-md text-white rounded-xl shadow-2xl border border-slate-700/80 p-4 w-80 text-xs space-y-3 transition-all duration-75 font-sans"
+            style={{
+              top: Math.max(10, Math.min(window.innerHeight - 320, mouseCoords.y + 15)),
+              left: Math.max(10, Math.min(window.innerWidth - 330, mouseCoords.x + (isHe ? -340 : 15))),
+              direction: isHe ? 'rtl' : 'ltr',
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <span className="font-mono font-bold text-indigo-400">#{order.orderNumber}</span>
+              <span className="font-semibold text-slate-400">
+                {isHe ? 'פרטי הזמנה' : 'Order Details'}
+              </span>
+            </div>
+            
+            <div className="space-y-1.5">
+              <div>
+                <span className="text-slate-400 font-medium block">{isHe ? 'לקוח:' : 'Customer:'}</span>
+                <span className="font-bold text-slate-100">{translate(order.customerName, lang)}</span>
+              </div>
+              
+              <div>
+                <span className="text-slate-400 font-medium block">{isHe ? 'כתובת אספקה:' : 'Delivery Address:'}</span>
+                <span className="text-slate-200">{translate(order.deliveryAddress, lang)}</span>
+              </div>
+
+              <div className="flex justify-between gap-4">
+                <div>
+                  <span className="text-slate-400 font-medium block">{isHe ? 'מחסן:' : 'Warehouse:'}</span>
+                  <span className="text-slate-200">{translate(order.warehouse, lang)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block">{isHe ? 'סה"כ לתשלום:' : 'Total Value:'}</span>
+                  <span className="text-indigo-400 font-bold">₪{order.totalAmount.toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-slate-400 font-medium block">{isHe ? 'פריטים בסבב:' : 'Items:'}</span>
+                <div className="max-h-20 overflow-y-auto space-y-0.5 text-[11px] text-slate-300 pr-1">
+                  {order.items.map((item, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span>• {item.name}</span>
+                      <span className="font-mono text-slate-400">x{item.quantity}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 text-[10px] text-slate-400 flex flex-col gap-1">
+              <div>
+                <span>{isHe ? 'נוצר בתאריך:' : 'Created at:'} </span>
+                <span className="font-mono text-slate-300">{formatDate(order.timestamp, lang)}</span>
+              </div>
+              <div>
+                <span>{isHe ? 'עדכון אחרון:' : 'Last updated:'} </span>
+                <span className="font-mono text-slate-300">{formatDate(lastUpdatedTime, lang)}</span>
+                {lastLog && (
+                  <span className="text-slate-500 font-medium block mt-0.5">
+                    {isHe 
+                      ? `סטטוס שונה ל-${lastLog.newStatus === 'pending' ? 'ממתין' : lastLog.newStatus === 'processing' ? 'בטיפול' : lastLog.newStatus === 'delivered' ? 'נמסר' : 'בוטל'} ע"י ${lastLog.updatedBy}` 
+                      : `Status updated to ${lastLog.newStatus} by ${lastLog.updatedBy}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
