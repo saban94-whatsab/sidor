@@ -104,3 +104,37 @@ export function getStoredConfig(): AppConfig {
     mode: 'live'
   };
 }
+// הוסף את ה-Map והפונקציות האלו לסוף הקובץ src/utils/api.ts
+
+export const TRANSLATIONS_MAP: Record<string, string> = {
+  'מחסן החרש': 'HaCharash Warehouse',
+  'מחסן התלמיד': 'HaTalmid Warehouse',
+  // ... הוסף כאן את כל המיפויים שהיו לך קודם
+};
+
+export function translate(text: string, toLang: 'he' | 'en'): string {
+  if (toLang === 'he') return text;
+  return TRANSLATIONS_MAP[text] || text;
+}
+
+export function formatDate(isoString: string, lang: 'he' | 'en'): string {
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return isoString;
+
+  if (lang === 'he') {
+    return date.toLocaleDateString('he-IL', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } else {
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+}
