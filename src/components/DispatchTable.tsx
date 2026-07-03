@@ -679,27 +679,57 @@ export default function DispatchTable({
     // Format timestamp
     const formattedTime = formatDate(changeTimestamp, lang);
 
+    // Calculate if order has been pending for more than 48 hours
+    const isPendingLong = normStatus === 'pending' && (() => {
+      const elapsedMs = Date.now() - new Date(order.timestamp).getTime();
+      return elapsedMs > 48 * 60 * 60 * 1000;
+    })();
+
     return (
-      <div className="relative group/status inline-block cursor-help">
-        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ${config.bg}`}>
-          <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
-          {isHe ? config.textHe : config.textEn}
-        </span>
-        
-        {/* Status Change Tooltip */}
-        <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-950 text-white rounded-lg px-3 py-2 shadow-lg opacity-0 group-hover/status:opacity-100 pointer-events-none transition-opacity duration-200 z-50 text-center text-[11px] whitespace-nowrap border border-slate-800">
-          <p className="font-bold text-indigo-400 mb-0.5">
-            {isHe ? 'עדכון סטטוס אחרון:' : 'Last Status Update:'}
-          </p>
-          <p className="font-mono font-medium text-slate-200">
-            {formattedTime}
-          </p>
-          {lastLog?.updatedBy && (
-            <p className="text-[10px] text-slate-400 mt-0.5">
-              {isHe ? `עודכן על ידי: ${translate(lastLog.updatedBy, lang)}` : `Updated by: ${lastLog.updatedBy}`}
+      <div className="flex items-center justify-center gap-1.5">
+        <div className="relative group/status inline-block cursor-help">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border ${config.bg}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
+            {isHe ? config.textHe : config.textEn}
+          </span>
+          
+          {/* Status Change Tooltip */}
+          <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-slate-950 text-white rounded-lg px-3 py-2 shadow-lg opacity-0 group-hover/status:opacity-100 pointer-events-none transition-opacity duration-200 z-50 text-center text-[11px] whitespace-nowrap border border-slate-800">
+            <p className="font-bold text-indigo-400 mb-0.5">
+              {isHe ? 'עדכון סטטוס אחרון:' : 'Last Status Update:'}
             </p>
-          )}
+            <p className="font-mono font-medium text-slate-200">
+              {formattedTime}
+            </p>
+            {lastLog?.updatedBy && (
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                {isHe ? `עודכן על ידי: ${translate(lastLog.updatedBy, lang)}` : `Updated by: ${lastLog.updatedBy}`}
+              </p>
+            )}
+          </div>
         </div>
+
+        {isPendingLong && (
+          <div className="relative group/pending-alert inline-block cursor-help shrink-0">
+            <AlertTriangle className="h-4 w-4 text-rose-500 animate-bounce" />
+            
+            {/* Tooltip */}
+            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-rose-950 text-white rounded-xl p-3 shadow-xl opacity-0 group-hover/pending-alert:opacity-100 pointer-events-none transition-opacity duration-200 z-50 text-xs w-56 space-y-1 border border-rose-800 text-left">
+              <div className="font-bold text-rose-400 border-b border-rose-800/60 pb-1 mb-1 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                <span>{isHe ? 'סיכון עיכוב משמעותי' : 'Severe Delay Risk'}</span>
+              </div>
+              <p className="text-rose-200 leading-relaxed text-[11px]">
+                {isHe 
+                  ? `ההזמנה ממתינה במצב 'חדש' מעל 48 שעות (נוצרה ב-${formattedTime}).` 
+                  : `Order has been pending for over 48 hours (created at ${formattedTime}).`}
+              </p>
+              <p className="text-[10px] text-rose-300 font-bold pt-1">
+                {isHe ? '⚠️ נדרש טיפול מיידי!' : '⚠️ Action required immediately!'}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
