@@ -122,7 +122,7 @@ const STORAGE_CONFIG_KEY = 'sabanos_config_v1';
 const STORAGE_ORDERS_KEY = 'sabanos_orders_v1';
 
 export function getStoredConfig(): AppConfig {
-  const DEFAULT_URL = 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+  const DEFAULT_URL = import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbxHm1GO0CNvCiTDoPwuLzPxFIzg5izfyLTH5lUP1OHu83tKUEEETtqTvZkXjan9By0UyQ/exec';
   const saved = localStorage.getItem(STORAGE_CONFIG_KEY);
   if (saved) {
     try {
@@ -492,7 +492,7 @@ const safeToIsoString = (val: any): string => {
  * Fetch live spreadsheet data via Google Apps Script WebApp
  */
 export async function fetchLiveOrders(webappUrl?: string): Promise<Order[]> {
-  const targetUrl = webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+  const targetUrl = webappUrl || import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbxHm1GO0CNvCiTDoPwuLzPxFIzg5izfyLTH5lUP1OHu83tKUEEETtqTvZkXjan9By0UyQ/exec';
   
   let rawList: any[] = [];
   try {
@@ -619,7 +619,7 @@ export async function fetchLiveOrders(webappUrl?: string): Promise<Order[]> {
  * Update order status directly in the Google Sheet via Apps Script WebApp
  */
 export async function updateLiveOrderStatus(webappUrl: string | undefined, orderNumber: string, status: OrderStatus): Promise<boolean> {
-  const targetUrl = webappUrl || 'https://script.google.com/macros/s/AKfycbwPfd6hqf62ZqlW-1wVSjNEQRXgLlEkGKEKB6xoHhsgE_w_4Rj8Pbht-6KQl3L3ZDHBTg/exec';
+  const targetUrl = webappUrl || import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbxHm1GO0CNvCiTDoPwuLzPxFIzg5izfyLTH5lUP1OHu83tKUEEETtqTvZkXjan9By0UyQ/exec';
   if (!targetUrl) return false;
   
   try {
