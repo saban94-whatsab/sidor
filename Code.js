@@ -83,6 +83,16 @@ function doGet(e) {
       return createJsonResponse({ success: success, orderNumber: orderNumber, status: newStatus }, callback);
     }
 
+    // Action: Delete Order
+    if (action === 'deleteOrder') {
+      const orderNumber = e.parameter.orderNumber;
+      if (!orderNumber) {
+        return createJsonResponse({ success: false, error: "Missing orderNumber parameter" }, callback);
+      }
+      const success = deleteSheetOrderAndSync(orderNumber);
+      return createJsonResponse({ success: success, orderNumber: orderNumber }, callback);
+    }
+
     // Action: Setup Sheet & Full Headers
     if (action === 'setupSheet' || action === 'initSheet') {
       const setupResult = setupSheetAndHeaders();
@@ -160,6 +170,24 @@ function doPost(e) {
       
       const success = updateSheetOrderStatusAndSync(orderNumber, newStatus);
       return createJsonResponse({ success: success, orderNumber: orderNumber, status: newStatus });
+    }
+
+    if (action === 'addOrder' || action === 'updateOrder') {
+      const orderData = postData.order || postData;
+      if (!orderData || !orderData.orderNumber) {
+        return createJsonResponse({ success: false, error: "Missing order payload or orderNumber" });
+      }
+      const success = addOrUpdateSheetOrderAndSync(orderData);
+      return createJsonResponse({ success: success, orderNumber: orderData.orderNumber });
+    }
+
+    if (action === 'deleteOrder') {
+      const orderNumber = postData.orderNumber;
+      if (!orderNumber) {
+        return createJsonResponse({ success: false, error: "Missing orderNumber" });
+      }
+      const success = deleteSheetOrderAndSync(orderNumber);
+      return createJsonResponse({ success: success, orderNumber: orderNumber });
     }
     
     return createJsonResponse({ success: false, error: "Unknown action: " + action });
@@ -481,6 +509,119 @@ function updateSheetOrderStatusAndSync(orderNumber, status) {
         console.error("Failed to sync updated order " + orderNumber + " to Firestore: " + syncErr.toString());
       }
       
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Add or update order details directly in the Google Sheet, and sync to Firestore
+ */
+function addOrUpdateSheetOrderAndSync(orderPayload) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) return false;
+
+  const orderNumber = String(orderPayload.orderNumber || '').trim();
+  if (!orderNumber) return false;
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = values[0];
+  const colIndices = findColumnIndices(headers);
+
+  let targetRowIndex = -1;
+  for (var i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (String(row[colIndices.orderNumber]).trim() === orderNumber) {
+      targetRowIndex = i + 1; // 1-based index
+      break;
+    }
+  }
+
+  // Format items raw string
+  var itemsStr = '';
+  if (Array.isArray(orderPayload.items)) {
+    itemsStr = orderPayload.items.map(function(item) {
+      var sku = item.sku ? '[' + item.sku + '] ' : '';
+      var qty = item.quantity ? ' - ' + item.quantity : '';
+      return sku + (item.name || 'פריט') + qty;
+    }).join('\n');
+  } else if (orderPayload.itemsRawString) {
+    itemsStr = String(orderPayload.itemsRawString);
+  }
+
+  var timestamp = orderPayload.timestamp || new Date().toISOString();
+  var customerName = orderPayload.customerName || '';
+  var warehouse = orderPayload.warehouse || 'מחסן החרש';
+  var deliveryAddress = orderPayload.deliveryAddress || '';
+  var status = orderPayload.status || 'pending';
+  var notes = orderPayload.notes || '';
+  var modelUsed = orderPayload.modelUsed || 'SabanOS-v2';
+  var tokens = orderPayload.tokens || 0;
+  var messageId = orderPayload.messageId || '';
+  var latitude = orderPayload.latitude || '';
+  var longitude = orderPayload.longitude || '';
+
+  if (targetRowIndex > 0) {
+    // Update existing row cells
+    if (colIndices.timestamp !== -1) sheet.getRange(targetRowIndex, colIndices.timestamp + 1).setValue(timestamp);
+    if (colIndices.customerName !== -1) sheet.getRange(targetRowIndex, colIndices.customerName + 1).setValue(customerName);
+    if (colIndices.warehouse !== -1) sheet.getRange(targetRowIndex, colIndices.warehouse + 1).setValue(warehouse);
+    if (colIndices.deliveryAddress !== -1) sheet.getRange(targetRowIndex, colIndices.deliveryAddress + 1).setValue(deliveryAddress);
+    if (colIndices.items !== -1) sheet.getRange(targetRowIndex, colIndices.items + 1).setValue(itemsStr);
+    if (colIndices.status !== -1) sheet.getRange(targetRowIndex, colIndices.status + 1).setValue(status);
+    if (colIndices.notes !== -1 && notes) sheet.getRange(targetRowIndex, colIndices.notes + 1).setValue(notes);
+    if (colIndices.latitude !== -1 && latitude) sheet.getRange(targetRowIndex, colIndices.latitude + 1).setValue(latitude);
+    if (colIndices.longitude !== -1 && longitude) sheet.getRange(targetRowIndex, colIndices.longitude + 1).setValue(longitude);
+  } else {
+    // Append new row matching headers
+    var newRow = new Array(headers.length).fill('');
+    if (colIndices.timestamp !== -1) newRow[colIndices.timestamp] = timestamp;
+    if (colIndices.orderNumber !== -1) newRow[colIndices.orderNumber] = orderNumber;
+    if (colIndices.customerName !== -1) newRow[colIndices.customerName] = customerName;
+    if (colIndices.warehouse !== -1) newRow[colIndices.warehouse] = warehouse;
+    if (colIndices.deliveryAddress !== -1) newRow[colIndices.deliveryAddress] = deliveryAddress;
+    if (colIndices.items !== -1) newRow[colIndices.items] = itemsStr;
+    if (colIndices.status !== -1) newRow[colIndices.status] = status;
+    if (colIndices.notes !== -1) newRow[colIndices.notes] = notes;
+    if (colIndices.modelUsed !== -1) newRow[colIndices.modelUsed] = modelUsed;
+    if (colIndices.tokens !== -1) newRow[colIndices.tokens] = tokens;
+    if (colIndices.messageId !== -1) newRow[colIndices.messageId] = messageId;
+    if (colIndices.latitude !== -1) newRow[colIndices.latitude] = latitude;
+    if (colIndices.longitude !== -1) newRow[colIndices.longitude] = longitude;
+
+    sheet.appendRow(newRow);
+  }
+
+  // Sync to Firestore
+  try {
+    syncToFirestoreRest(orderNumber, orderPayload);
+  } catch (e) {
+    console.error('Firestore REST sync failed: ' + e.toString());
+  }
+
+  return true;
+}
+
+/**
+ * Delete order row from Google Sheet
+ */
+function deleteSheetOrderAndSync(orderNumber) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) return false;
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = values[0];
+  const colIndices = findColumnIndices(headers);
+
+  for (var i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (String(row[colIndices.orderNumber]).trim() === String(orderNumber).trim()) {
+      sheet.deleteRow(i + 1);
       return true;
     }
   }

@@ -710,6 +710,87 @@ export async function updateLiveOrderStatus(webappUrl: string | undefined, order
   }
 }
 
+/**
+ * Add a new order directly to the online Google Sheet via Apps Script WebApp
+ */
+export async function addLiveOrder(webappUrl: string | undefined, order: Order): Promise<boolean> {
+  const targetUrl = webappUrl || import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbzuaPe5R2qgoXFF43FKdasOgQTMnxRZ6Icb2QfHfcJ8dWGnFIznCkM8GE3OSiE3PVpatg/exec';
+  if (!targetUrl) return false;
+
+  try {
+    const response = await fetch('/api/add-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        webappUrl: targetUrl,
+        order
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Proxy add-order returned HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    return json && json.success === true;
+  } catch (err) {
+    console.error('Failed to add order to live Google Sheet:', err);
+    return false;
+  }
+}
+
+/**
+ * Update full order details in the online Google Sheet via Apps Script WebApp
+ */
+export async function updateLiveOrderDetails(webappUrl: string | undefined, order: Order): Promise<boolean> {
+  const targetUrl = webappUrl || import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbzuaPe5R2qgoXFF43FKdasOgQTMnxRZ6Icb2QfHfcJ8dWGnFIznCkM8GE3OSiE3PVpatg/exec';
+  if (!targetUrl) return false;
+
+  try {
+    const response = await fetch('/api/update-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        webappUrl: targetUrl,
+        order
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Proxy update-order returned HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    return json && json.success === true;
+  } catch (err) {
+    console.error('Failed to update order in live Google Sheet:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete an order from the online Google Sheet via Apps Script WebApp
+ */
+export async function deleteLiveOrder(webappUrl: string | undefined, orderNumber: string): Promise<boolean> {
+  const targetUrl = webappUrl || import.meta.env.VITE_GOOGLE_WEBAPP_URL || 'https://script.google.com/macros/s/AKfycbzuaPe5R2qgoXFF43FKdasOgQTMnxRZ6Icb2QfHfcJ8dWGnFIznCkM8GE3OSiE3PVpatg/exec';
+  if (!targetUrl) return false;
+
+  try {
+    const response = await fetch('/api/delete-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        webappUrl: targetUrl,
+        orderNumber
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Proxy delete-order returned HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    return json && json.success === true;
+  } catch (err) {
+    console.error('Failed to delete order from live Google Sheet:', err);
+    return false;
+  }
+}
+
 // Compute key metrics
 export function computeMetrics(orders: Order[]): MetricSummary {
   const activeWarehouses = new Set(orders.map(o => o.warehouse)).size;

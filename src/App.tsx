@@ -8,6 +8,9 @@ import {
   createRandomOrder, 
   fetchLiveOrders,
   updateLiveOrderStatus,
+  addLiveOrder,
+  updateLiveOrderDetails,
+  deleteLiveOrder,
   getStoredAuditLogs,
   saveStoredAuditLogs
 } from './utils/api';
@@ -420,6 +423,68 @@ export default function App() {
     }
   };
 
+  // Create new order live in Google Sheet & Firestore
+  const handleCreateOrder = async (newOrder: Order) => {
+    const updated = [newOrder, ...orders];
+    setOrders(updated);
+    saveStoredOrders(updated);
+
+    // Write audit log entry
+    const newLog: AuditLogEntry = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      orderId: newOrder.id,
+      orderNumber: newOrder.orderNumber,
+      customerName: newOrder.customerName,
+      oldStatus: 'pending',
+      newStatus: newOrder.status,
+      timestamp: new Date().toISOString(),
+      updatedBy: 'Manager (Created)'
+    };
+    const updatedLogs = [newLog, ...auditLogs];
+    setAuditLogs(updatedLogs);
+    saveStoredAuditLogs(updatedLogs);
+
+    // Save to Firestore
+    try {
+      await saveOrderToFirestore(newOrder);
+      await saveAuditLogToFirestore(newLog);
+    } catch (fsErr) {
+      console.error('Failed to save created order to Firestore:', fsErr);
+    }
+
+    // Call live add order API on Google Sheets
+    if (config.webappUrl) {
+      try {
+        await addLiveOrder(config.webappUrl, newOrder);
+      } catch (err) {
+        console.error('Failed to sync new order to live sheet:', err);
+      }
+    }
+  };
+
+  // Update full order details live in Google Sheet & Firestore
+  const handleUpdateOrderDetails = async (updatedOrder: Order) => {
+    const updated = orders.map(o => o.id === updatedOrder.id ? updatedOrder : o);
+    setOrders(updated);
+    saveStoredOrders(updated);
+
+    // Save to Firestore
+    try {
+      await saveOrderToFirestore(updatedOrder);
+    } catch (fsErr) {
+      console.error('Failed to save updated order to Firestore:', fsErr);
+    }
+
+    // Sync full order details to live Google Sheet
+    if (config.webappUrl) {
+      try {
+        await updateLiveOrderDetails(config.webappUrl, updatedOrder);
+      } catch (err) {
+        console.error('Failed to sync order update to live sheet:', err);
+      }
+    }
+  };
+
   // Assign driver to order
   const handleAssignDriver = async (orderId: string, driverName: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
@@ -442,9 +507,18 @@ export default function App() {
     } catch (fsErr) {
       console.error('Failed to save order driver update to Firestore:', fsErr);
     }
+
+    // Sync to live sheet
+    if (config.webappUrl) {
+      try {
+        await updateLiveOrderDetails(config.webappUrl, updatedOrder);
+      } catch (err) {
+        console.error('Failed to sync driver update to live sheet:', err);
+      }
+    }
   };
 
-  // Delete an individual log locally
+  // Delete an individual log locally and in Google Sheet
   const handleDeleteOrder = async (orderId: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
     const updated = orders.filter(o => o.id !== orderId);
@@ -472,6 +546,15 @@ export default function App() {
         await saveAuditLogToFirestore(newLog);
       } catch (fsErr) {
         console.error('Failed to delete/audit to Firestore:', fsErr);
+      }
+
+      // Delete from live Google Sheet
+      if (config.webappUrl) {
+        try {
+          await deleteLiveOrder(config.webappUrl, targetOrder.orderNumber);
+        } catch (err) {
+          console.error('Failed to delete order from live sheet:', err);
+        }
       }
     }
   };
@@ -1236,6 +1319,8 @@ export default function App() {
                     onUpdateStatus={handleUpdateStatus}
                     onAssignDriver={handleAssignDriver}
                     onDeleteOrder={handleDeleteOrder}
+                    onCreateOrder={handleCreateOrder}
+                    onUpdateOrderDetails={handleUpdateOrderDetails}
                     lang={lang}
                     isLoading={isLoading}
                     selectedOrderNumber={selectedOrderNumber}

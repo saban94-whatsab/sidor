@@ -22,13 +22,16 @@ import {
   X,
   Activity,
   AlertTriangle,
-  Truck
+  Truck,
+  Plus,
+  Edit3
 } from 'lucide-react';
 import { Order, OrderStatus, Language, AuditLogEntry } from '../types';
 import { translate, formatDate, MOCK_PRODUCTS } from '../utils/api';
 import { motion } from 'motion/react';
 import { QuickFilter } from './QuickFilter';
 import { DispatchTrendChart } from './DispatchTrendChart';
+import { OrderFormModal } from './OrderFormModal';
 
 interface DispatchTableProps {
   orders: Order[];
@@ -36,6 +39,8 @@ interface DispatchTableProps {
   onUpdateStatus: (orderId: string, status: OrderStatus) => void;
   onAssignDriver?: (orderId: string, driverName: string) => void;
   onDeleteOrder?: (orderId: string) => void;
+  onCreateOrder?: (order: Order) => void;
+  onUpdateOrderDetails?: (order: Order) => void;
   lang: Language;
   isLoading: boolean;
   selectedOrderNumber?: string | null;
@@ -51,12 +56,18 @@ export default function DispatchTable({
   onUpdateStatus,
   onAssignDriver,
   onDeleteOrder,
+  onCreateOrder,
+  onUpdateOrderDetails,
   lang,
   isLoading,
   selectedOrderNumber,
   onSelectOrderNumber,
 }: DispatchTableProps) {
   const isHe = lang === 'he';
+
+  // Modal State for Order creation and editing
+  const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
 
   // State for filtering/sorting
   const [searchTerm, setSearchTerm] = useState(() => {
@@ -1062,29 +1073,44 @@ export default function DispatchTable({
                 </h4>
               </div>
               
-              <div className="relative w-full sm:w-80">
-                <Search className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 ${isHe ? 'right-3' : 'left-3'}`} />
-                <input
-                  id="dispatch-table-quick-search"
-                  type="text"
-                  placeholder={isHe ? 'חפש לפי שם לקוח או מספר הזמנה...' : 'Search by name or order #...'}
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className={`w-full rounded-xl border border-slate-200 bg-white py-1.5 text-xs outline-none font-medium transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-100/50 shadow-xs ${
-                    isHe ? 'pl-8 pr-9 text-right' : 'pl-9 pr-8 text-left'
-                  }`}
-                />
-                {searchTerm && (
-                  <button
-                    onClick={() => setSearchTerm('')}
-                    className={`absolute top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer rounded-full hover:bg-slate-100 ${
-                      isHe ? 'left-2.5' : 'right-2.5'
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  id="dispatch-add-new-order-btn"
+                  onClick={() => {
+                    setEditingOrder(null);
+                    setIsOrderModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-md shadow-blue-500/20 cursor-pointer active:scale-95"
+                  title={isHe ? 'הוסף הזמנה חדשה לגליון אונליין' : 'Add new order to live sheet'}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>{isHe ? 'הוסף הזמנה חדשה' : 'New Order'}</span>
+                </button>
+
+                <div className="relative w-full sm:w-72">
+                  <Search className={`absolute top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 ${isHe ? 'right-3' : 'left-3'}`} />
+                  <input
+                    id="dispatch-table-quick-search"
+                    type="text"
+                    placeholder={isHe ? 'חפש לפי שם לקוח או מספר הזמנה...' : 'Search by name or order #...'}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className={`w-full rounded-xl border border-slate-200 bg-white py-1.5 text-xs outline-none font-medium transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-100/50 shadow-xs ${
+                      isHe ? 'pl-8 pr-9 text-right' : 'pl-9 pr-8 text-left'
                     }`}
-                    title={isHe ? 'נקה חיפוש' : 'Clear search'}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className={`absolute top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer rounded-full hover:bg-slate-100 ${
+                        isHe ? 'left-2.5' : 'right-2.5'
+                      }`}
+                      title={isHe ? 'נקה חיפוש' : 'Clear search'}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             </>
           )}
@@ -1608,9 +1634,21 @@ export default function DispatchTable({
                                       >
                                         <Trash2 className="h-3 w-3" />
                                         <span>{isHe ? 'מחק לחלוטין' : 'Delete Log'}</span>
-                                      </button>
-                                    )}
-                                  </div>
+                                       </button>
+                                     )}
+
+                                     <button
+                                       id={`dispatch-edit-order-${order.id}`}
+                                       onClick={() => {
+                                         setEditingOrder(order);
+                                         setIsOrderModalOpen(true);
+                                       }}
+                                       className="rounded-lg py-1.5 px-2.5 text-xs font-semibold border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-all duration-200 ease-out gpu-scale-hover hover-border-inset touch-active-state text-center flex items-center justify-center gap-1 cursor-pointer col-span-2 mt-1"
+                                     >
+                                       <Edit3 className="h-3.5 w-3.5" />
+                                       <span>{isHe ? 'ערוך פרטי הזמנה (עדכון אונליין)' : 'Edit Order Details (Sync Online)'}</span>
+                                     </button>
+                                   </div>
                                 </div>
 
                               </div>
@@ -1716,6 +1754,24 @@ export default function DispatchTable({
           </div>
         );
       })()}
+
+      {/* Order Creation & Editing Form Modal */}
+      <OrderFormModal
+        isOpen={isOrderModalOpen}
+        onClose={() => {
+          setIsOrderModalOpen(false);
+          setEditingOrder(null);
+        }}
+        initialOrder={editingOrder}
+        lang={lang}
+        onSave={(savedOrder) => {
+          if (editingOrder && onUpdateOrderDetails) {
+            onUpdateOrderDetails(savedOrder);
+          } else if (onCreateOrder) {
+            onCreateOrder(savedOrder);
+          }
+        }}
+      />
 
     </div>
   );

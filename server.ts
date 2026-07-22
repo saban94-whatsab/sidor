@@ -203,6 +203,105 @@ async function startServer() {
     }
   });
 
+  // API proxy route for updating full order details in Google Sheets
+  app.post("/api/update-order", async (req, res) => {
+    const { webappUrl, order } = req.body;
+    if (!webappUrl || !order || !order.orderNumber) {
+      return res.status(400).json({ success: false, error: "Missing required order parameters" });
+    }
+
+    try {
+      const response = await fetch(webappUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updateOrder",
+          order: order
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Google Sheets WebApp returned HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        res.json(json);
+      } catch (parseErr) {
+        res.json({ success: true, message: "Updated order in Google Sheet" });
+      }
+    } catch (error: any) {
+      console.error("Server proxy error updating order:", error);
+      res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  // API proxy route for adding a new order to Google Sheets
+  app.post("/api/add-order", async (req, res) => {
+    const { webappUrl, order } = req.body;
+    if (!webappUrl || !order || !order.orderNumber) {
+      return res.status(400).json({ success: false, error: "Missing required order parameters" });
+    }
+
+    try {
+      const response = await fetch(webappUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "addOrder",
+          order: order
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Google Sheets WebApp returned HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        res.json(json);
+      } catch (parseErr) {
+        res.json({ success: true, message: "Added order to Google Sheet" });
+      }
+    } catch (error: any) {
+      console.error("Server proxy error adding order:", error);
+      res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
+  // API proxy route for deleting an order from Google Sheets
+  app.post("/api/delete-order", async (req, res) => {
+    const { webappUrl, orderNumber } = req.body;
+    if (!webappUrl || !orderNumber) {
+      return res.status(400).json({ success: false, error: "Missing webappUrl or orderNumber" });
+    }
+
+    try {
+      const response = await fetch(webappUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "deleteOrder",
+          orderNumber: orderNumber
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Google Sheets WebApp returned HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      try {
+        const json = JSON.parse(text);
+        res.json(json);
+      } catch (parseErr) {
+        res.json({ success: true, message: "Deleted order from Google Sheet" });
+      }
+    } catch (error: any) {
+      console.error("Server proxy error deleting order:", error);
+      res.status(500).json({ success: false, error: error.message || String(error) });
+    }
+  });
+
   // Noa AI interactive assistant route - integrates Gemini 3.5 Flash lazily and securely
   app.post("/api/chat", async (req, res) => {
     const { message, orders } = req.body;
